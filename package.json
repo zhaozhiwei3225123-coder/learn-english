@@ -1,0 +1,25 @@
+{
+  "name": "vocab-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "本地单词学习台：导入 Excel 单词表，每日随机学习与复习",
+  "scripts": {
+    "dev": "vite --port 5180 --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --port 5180"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "cmu-pronouncing-dictionary": "^3.0.0",
+    "kokoro-js": "^1.2.1",
+    "phonemizer": "^1.2.1",
+    "vue": "^3.5.13",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
