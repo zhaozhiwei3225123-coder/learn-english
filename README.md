@@ -94,3 +94,24 @@ vocab-app/
   头，让 onnxruntime 启用多线程（单线程会慢一倍）。改动该文件后需刷新页面（浏览器要重新加载才生效）；
   若用自己的服务器部署，也要配置这两个响应头。
 - 构建产物 `dist/` 会一并包含模型文件，因此体积约 140MB，属于正常现象。
+
+## 部署到 GitHub Pages
+
+仓库自带 `.github/workflows/deploy.yml`，推送到 `main` 会自动构建并发布。
+
+**首次部署必须把构建源切到 Actions**：Settings → Pages → Build and deployment →
+Source 选择 **GitHub Actions**（不要选 "Deploy from a branch"）。
+如果仍用分支源，GitHub 会把仓库根目录当作站点，根目录的 `index.html` 是开发入口
+（引用 `/src/main.ts`），打开只会白屏。
+
+站点地址：`https://<用户名>.github.io/<仓库名>/`
+
+注意事项：
+
+- 仓库名不是 `<用户名>.github.io` 时，`vite.config.ts` 的 `base` 必须写成 `/<仓库名>/`，
+  否则 JS / CSS 走绝对路径会 404，页面空白。
+- `node_modules`、`dist` 不要提交（已在 `.gitignore` 里）。仓库里塞几百 MB 依赖会让
+  Pages 自带的分支构建超时失败，表现为访问一直是 404 "Site not found"。
+- GitHub Pages 不支持自定义响应头，拿不到 COOP/COEP，Kokoro 会退化为单线程
+  （每词慢 2~3 秒）。线上更推荐在设置里改用系统语音。
+- 首次访问要下载约 88MB 的语音模型，手机上不建议开启 Kokoro。
