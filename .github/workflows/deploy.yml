@@ -29,6 +29,21 @@ jobs:
 
       - run: npm run build
 
+      # 仓库若还停留在「分支」构建源，GitHub 会在部署后把仓库根目录覆盖回站点。
+      # 这里尝试把构建源切成 Actions；没有权限时会失败，但不影响后续步骤。
+      - name: 确保 Pages 使用 Actions 构建源
+        continue-on-error: true
+        run: |
+          echo "切换 build_type=workflow ..."
+          curl -sS -o /tmp/resp.json -w "HTTP %{http_code}\n" \
+            -X PUT \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/pages" \
+            -d '{"build_type":"workflow"}'
+          head -c 400 /tmp/resp.json || true
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
