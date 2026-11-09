@@ -9,6 +9,7 @@ const isolationHeaders = {
 
 export default defineConfig({
   plugins: [vue()],
+  base: '/learn-english/',
   server: {
     port: 5180,
     host: '127.0.0.1',
