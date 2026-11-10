@@ -12,6 +12,8 @@ import { todayKey } from '../lib/date';
 
 export const writingTheme = ref<string>('日常');
 export const writingLevel = ref<SentenceLevel>('intermediate');
+/** 练习形式：free = 整句写 AI 批改；fill = 逐词填空本地判分 */
+export const writeMode = ref<'free' | 'fill'>('free');
 
 /** 当前这道题（切到别的页签再回来还在） */
 export const currentPrompt = ref<{ zh: string; en: string } | null>(null);
@@ -119,6 +121,38 @@ export async function submitAnswer(
   } finally {
     grading.value = false;
   }
+}
+
+/** 逐词填空：判分在本地完成，这里只负责落一条记录 */
+export function recordFillAttempt(result: {
+  text: string;
+  score: number;
+  issues: SentenceAttempt['issues'];
+  comment: string;
+}): SentenceAttempt | null {
+  const prompt = currentPrompt.value;
+  if (!prompt) return null;
+  const record: SentenceAttempt = {
+    id: `sent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    zh: prompt.zh,
+    reference: prompt.en,
+    corrected: prompt.en,
+    text: result.text,
+    issues: result.issues,
+    comment: result.comment,
+    score: result.score,
+    theme: writingTheme.value,
+    level: writingLevel.value,
+    mode: 'fill',
+    at: Date.now(),
+  };
+  state.sentenceAttempts.unshift(record);
+  if (state.sentenceAttempts.length > 2000) {
+    state.sentenceAttempts = state.sentenceAttempts.slice(0, 2000);
+  }
+  lastResult.value = null;
+  save();
+  return record;
 }
 
 export function removeAttempt(id: string): void {

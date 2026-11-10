@@ -99,6 +99,8 @@ export interface SentenceAttempt {
   score: number;
   theme: string;
   level: SentenceLevel;
+  /** 练习形式：free = 整句自由写 AI 批改；fill = 逐词填空本地判分 */
+  mode?: 'free' | 'fill';
   at: number;
 }
 

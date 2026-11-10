@@ -7,6 +7,7 @@ import { hasApiKey, resolveConfig, SENTENCE_LEVELS, SENTENCE_THEMES } from '../l
 import {
   writingTheme,
   writingLevel,
+  writeMode,
   currentPrompt,
   generating,
   grading,
@@ -20,6 +21,7 @@ import {
   clearAttempts,
   retryCurrent,
 } from '../store/writing';
+import FillCard from './FillCard.vue';
 
 const answer = ref('');
 const textarea = ref<HTMLTextAreaElement | null>(null);
@@ -150,8 +152,15 @@ onMounted(() => {
   <template v-else>
     <div class="panel">
       <div class="panel-head">
-        <h2>造句练习 · 中译英</h2>
-        <span class="pager-info">每题实时生成，做完就存进下面的记录</span>
+        <h2>造句练习</h2>
+        <div class="mode-seg">
+          <button :class="{ active: writeMode === 'free' }" @click="writeMode = 'free'">
+            ✍️ 自由写 · AI 批改
+          </button>
+          <button :class="{ active: writeMode === 'fill' }" @click="writeMode = 'fill'">
+            ⌨️ 逐词填空
+          </button>
+        </div>
       </div>
 
       <div class="write-controls">
@@ -187,7 +196,17 @@ onMounted(() => {
 
       <div v-if="generating && !currentPrompt" class="empty">正在向 DeepSeek 要题目…</div>
 
-      <div v-if="currentPrompt" class="write-card">
+      <!-- 逐词填空模式 -->
+      <FillCard
+        v-if="writeMode === 'fill' && currentPrompt"
+        :zh="currentPrompt.zh"
+        :en="currentPrompt.en"
+        @next="onNext"
+        @skip="onNext"
+      />
+
+      <!-- 自由写模式 -->
+      <div v-if="writeMode === 'free' && currentPrompt" class="write-card">
         <div class="write-zh">{{ currentPrompt.zh }}</div>
         <div class="write-hint">把这句中文写成英文</div>
 
@@ -276,15 +295,16 @@ onMounted(() => {
         <details v-for="a in attempts" :key="a.id" class="write-history">
           <summary>
             <span class="hi-score" :class="scoreClass(a.score)">{{ a.score }}</span>
+            <span class="hi-mode">{{ a.mode === 'fill' ? '填空' : '造句' }}</span>
             <span class="wh-zh">{{ a.zh }}</span>
             <span class="wh-meta">{{ levelLabel(a.level) }} · {{ a.theme }} · {{ fmtDate(a.at) }}</span>
           </summary>
           <div class="wh-body">
             <div class="res-block">
-              <div class="res-label">你写的</div>
+              <div class="res-label">{{ a.mode === 'fill' ? '你填的' : '你写的' }}</div>
               <p class="res-text dim">{{ a.text }}</p>
             </div>
-            <div class="res-block">
+            <div v-if="a.mode !== 'fill'" class="res-block">
               <div class="res-label">AI 修正</div>
               <p class="res-text">{{ a.corrected }}</p>
             </div>

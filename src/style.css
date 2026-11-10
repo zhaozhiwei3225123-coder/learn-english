@@ -1528,3 +1528,140 @@ textarea:focus {
     display: none;
   }
 }
+
+/* ---------- 逐词填空 ---------- */
+.mode-seg {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f5f6fa;
+  gap: 2px;
+}
+.mode-seg button {
+  border: 0;
+  background: none;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mode-seg button.active {
+  background: #fff;
+  color: var(--brand);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(22, 32, 58, 0.12);
+}
+
+.fill-card {
+  background: linear-gradient(180deg, #f7faff, #fff 45%);
+}
+.fill-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px 8px;
+  margin-top: 20px;
+  font-size: 19px;
+  line-height: 1.4;
+}
+.fill-punct {
+  color: var(--ink-2);
+  padding-bottom: 6px;
+}
+.blank {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+.blank-input {
+  border: 0;
+  border-bottom: 2.5px solid #b9c0cf;
+  border-radius: 0;
+  background: none;
+  padding: 0 2px 4px;
+  font-family: inherit;
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.blank-input:focus {
+  border-bottom-color: var(--brand);
+}
+.blank-input::placeholder {
+  color: #cdd2dd;
+  font-weight: 400;
+}
+.blank.ok .blank-input {
+  border-bottom-color: #2f6bff;
+  color: #2f6bff;
+}
+.blank.bad .blank-input {
+  border-bottom-color: #e5484d;
+  color: #e5484d;
+  text-decoration: line-through;
+  text-decoration-color: rgba(229, 72, 77, 0.45);
+  animation: blank-shake 0.22s ease-in-out;
+}
+.blank.show .blank-input {
+  border-bottom-color: var(--brand);
+  color: var(--brand);
+}
+@keyframes blank-shake {
+  0%, 100% { transform: translateX(0); }
+  35% { transform: translateX(-3px); }
+  70% { transform: translateX(3px); }
+}
+.blank-fix {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: 7px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  z-index: 1;
+}
+.fill-line.done {
+  padding-bottom: 26px;
+}
+.fill-result {
+  margin-top: 22px;
+}
+.hi-mode {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #eef0ff;
+  color: var(--brand);
+  font-size: 11.5px;
+}
+
+@media (max-width: 720px) {
+  .fill-line {
+    gap: 18px 10px;
+    font-size: 17px;
+  }
+  .blank-input {
+    font-size: 17px;
+  }
+  .mode-seg {
+    width: 100%;
+  }
+  .mode-seg button {
+    flex: 1;
+    padding: 6px 4px;
+  }
+}
