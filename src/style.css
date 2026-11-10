@@ -2118,6 +2118,15 @@ textarea:focus {
   color: var(--ink-3);
   white-space: nowrap;
 }
+.his-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: #eef3ff;
+  color: #3b62c9;
+  font-size: 11px;
+  line-height: 1.7;
+}
 .daily-title-en {
   margin-top: 6px;
   font-family: inherit;

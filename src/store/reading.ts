@@ -42,11 +42,26 @@ export function analyze(text = articleText.value): void {
   article.value = t;
   picked.value = null;
   saveText(t);
-  note.value = notes.get(t) ?? null;
-  paraZh.value = [];
-  zhOpen.value = [];
-  quiz.value = null;
-  quizPicks.value = [];
+  hydrate(t);
+}
+
+/** 打开一篇文章时，把往期里存过的精读 / 译文 / 题目一起还原 */
+function hydrate(text: string): void {
+  const it = dailyList.value.find((x) => x.text === text);
+
+  const n = it?.note ?? notes.get(text) ?? null;
+  note.value = n;
+  if (n) notes.set(text, n);
+
+  const zh = it?.zh ?? zhCache.get(text) ?? [];
+  paraZh.value = zh.slice();
+  if (zh.length) zhCache.set(text, zh.slice());
+  // 从往期翻出来、并且存过译文时，直接展开成中英对照，省得再逐段点
+  zhOpen.value = it?.zh?.length ? it.zh.map(() => true) : [];
+
+  const qs = it?.quiz ?? null;
+  quiz.value = qs;
+  quizPicks.value = qs ? qs.map((_, i) => it?.quizPicks?.[i] ?? -1) : [];
 }
 
 export function clearArticle(): void {
@@ -63,7 +78,7 @@ export function clearArticle(): void {
 
 /* ------------------------------------------------------- AI 精读 */
 
-/** 精读结果只在内存里按正文缓存，切回同一篇不用再花 token */
+/** 精读结果按正文缓存在内存，切回同一篇不用再花 token（落盘的是往期条目里的 note） */
 const notes = new Map<string, ArticleNote>();
 
 export const note = ref<ArticleNote | null>(null);
@@ -71,16 +86,12 @@ export const noteLoading = ref(false);
 
 export function setNote(n: ArticleNote | null): void {
   note.value = n;
-  if (n && article.value) notes.set(article.value, n);
-  if (n?.titleZh) attachTitleZh(article.value, n.titleZh);
-}
-
-/** 把 AI 起的中文标题写回往期条目，卡片上就能显示中文标题 */
-function attachTitleZh(text: string, titleZh: string): void {
-  const hit = dailyList.value.find((it) => it.text === text);
-  if (!hit || hit.titleZh === titleZh) return;
-  hit.titleZh = titleZh;
-  saveDaily();
+  if (!n) return;
+  if (article.value) notes.set(article.value, n);
+  patchHistory({
+    note: n,
+    ...(n.titleZh ? { titleZh: n.titleZh } : {}),
+  });
 }
 
 /* ---------------------------------------------------------------- 匹配 */
@@ -185,7 +196,7 @@ export function closePick(): void {
 /* ------------------------------------------------------- 今日一篇 */
 
 export interface DailyItem {
-  /** `${日期}|${来源}|${难度}`，同一天同难度只保留一篇 */
+  /** `${日期}|${来源}|${难度}`；自己粘的文章是 `paste|时间戳` */
   key: string;
   date: string;
   title: string;
@@ -196,6 +207,13 @@ export interface DailyItem {
   url: string;
   words: number;
   ts: number;
+  /** 存下来的 AI 精读（中文标题、导读、生词、长难句） */
+  note?: ArticleNote;
+  /** 存下来的逐段中文译文，与自然段一一对应 */
+  zh?: string[];
+  /** 存下来的阅读理解题目与作答（-1 = 未答） */
+  quiz?: QuizQuestion[];
+  quizPicks?: number[];
 }
 
 const DAILY_KEY = 'vocab-app.reading.daily';
@@ -217,7 +235,14 @@ function saveDaily(): void {
   try {
     localStorage.setItem(DAILY_KEY, JSON.stringify(dailyList.value));
   } catch (err) {
-    console.warn('[reading] 保存往期文章失败', err);
+    // 多半是译文 / 题目把 localStorage 塞满了：先砍一半再试一次
+    try {
+      dailyList.value = dailyList.value.slice(0, 20);
+      localStorage.setItem(DAILY_KEY, JSON.stringify(dailyList.value));
+      console.warn('[reading] 存储空间不足，往期已精简为最近 20 篇');
+    } catch {
+      console.warn('[reading] 保存往期文章失败', err);
+    }
   }
 }
 
@@ -225,6 +250,68 @@ function today(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 找当前文章对应的往期条目。create = true 时，如果这篇是自己粘的（往期里没有）
+ * 就顺手建一条，这样 AI 解析、译文、题目都有地方存，历史里能翻回来。
+ */
+function historyEntry(create = false): DailyItem | null {
+  const text = article.value;
+  if (!text) return null;
+
+  const found = dailyList.value.find((it) => it.text === text);
+  if (found) return found;
+  if (!create) return null;
+
+  const plain = text.replace(/\s+/g, ' ').trim();
+  const item: DailyItem = {
+    key: `paste|${Date.now()}`,
+    date: today(),
+    title: plain.length > 24 ? `${plain.slice(0, 24)}…` : plain,
+    text,
+    source: '自选文章',
+    url: '',
+    words: text.split(/\s+/).filter(Boolean).length,
+    ts: Date.now(),
+  };
+  dailyList.value = [item, ...dailyList.value].slice(0, 40);
+  saveDaily();
+  return item;
+}
+
+/** 把 AI 产物写回往期条目（没有就新建） */
+function patchHistory(patch: Partial<DailyItem>): void {
+  const it = historyEntry(true);
+  if (!it) return;
+  Object.assign(it, patch);
+  saveDaily();
+}
+
+/** 把一篇「不是今日一篇」的文章（百科搜索 / 自己粘贴）也收进往期，方便以后查阅 */
+export function archiveArticle(a: {
+  title: string;
+  text: string;
+  source: string;
+  url: string;
+}): void {
+  const text = a.text.trim();
+  if (!text) return;
+  if (dailyList.value.some((it) => it.text === text)) return;
+
+  const plain = (a.title || text).replace(/\s+/g, ' ').trim();
+  const item: DailyItem = {
+    key: `pick|${Date.now()}`,
+    date: today(),
+    title: plain.length > 40 ? `${plain.slice(0, 40)}…` : plain,
+    text,
+    source: a.source,
+    url: a.url,
+    words: text.split(/\s+/).filter(Boolean).length,
+    ts: Date.now(),
+  };
+  dailyList.value = [item, ...dailyList.value].slice(0, 40);
+  saveDaily();
 }
 
 /** 今日一篇的来源与难度（参考百词斩 MintDaily：一天一篇，难度可选） */
@@ -312,6 +399,7 @@ async function ensureParaZh(): Promise<void> {
     const out = await translateParas(paras, ensureConfig());
     paraZh.value = out;
     zhCache.set(article.value, out.slice());
+    patchHistory({ zh: out.slice() });
   } finally {
     zhLoading.value = false;
   }
@@ -362,6 +450,7 @@ export async function makeQuiz(): Promise<void> {
     const qs = await generateQuiz({ text: article.value, config: ensureConfig() });
     quiz.value = qs;
     quizPicks.value = qs.map(() => -1);
+    patchHistory({ quiz: qs, quizPicks: quizPicks.value.slice() });
   } finally {
     quizLoading.value = false;
   }
@@ -370,9 +459,11 @@ export async function makeQuiz(): Promise<void> {
 export function pickQuizOption(qi: number, oi: number): void {
   if (!quiz.value || quizPicks.value[qi] >= 0) return;
   quizPicks.value[qi] = oi;
+  patchHistory({ quizPicks: quizPicks.value.slice() });
 }
 
 export function resetQuiz(): void {
   if (!quiz.value) return;
   quizPicks.value = quiz.value.map(() => -1);
+  patchHistory({ quizPicks: quizPicks.value.slice() });
 }

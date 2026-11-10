@@ -26,6 +26,7 @@ import {
   picked,
   analyze,
   clearArticle,
+  archiveArticle,
   pickPiece,
   closePick,
   dailyList,
@@ -199,7 +200,12 @@ function switchWikiMode(simple: boolean): void {
 
 function startDaily(it: DailyItem): void {
   loadArticle(it);
-  toast(`已打开：${it.title || it.source}`);
+  const saved = [it.note && '解析', it.zh?.length && '译文', it.quiz?.length && '题目'].filter(Boolean);
+  toast(
+    saved.length
+      ? `已打开：${it.titleZh || it.title || it.source}（含已存${saved.join(' / ')}）`
+      : `已打开：${it.titleZh || it.title || it.source}`
+  );
 }
 
 /** 进阅读页时，今天这篇还没抓就自动抓 */
@@ -224,7 +230,7 @@ async function onAnnotate(): Promise<void> {
   try {
     const n = await annotateArticle({ text: article.value, config: cfg });
     setNote(n);
-    toast(n.titleZh ? `精读完成：${n.titleZh}` : '精读完成');
+    toast(n.titleZh ? `精读完成，已存入往期：${n.titleZh}` : '精读完成，已存入往期');
   } catch (err) {
     toast(err instanceof Error ? err.message : '精读失败，稍后再试');
   } finally {
@@ -262,6 +268,7 @@ async function onTranslateAll(): Promise<void> {
   }
   try {
     await translateAllPara();
+    toast('译文已生成，并存入往期');
   } catch (err) {
     toast(err instanceof Error ? err.message : '翻译失败，请重试');
   }
@@ -275,6 +282,7 @@ async function onMakeQuiz(): Promise<void> {
   }
   try {
     await makeQuiz();
+    toast(`出了 ${quiz.value?.length ?? 5} 道题，已存入往期`);
   } catch (err) {
     toast(err instanceof Error ? err.message : '出题失败，请重试');
   }
@@ -284,8 +292,10 @@ async function onFetchWiki(): Promise<void> {
   if (fetching.value) return;
   fetching.value = 'wiki';
   try {
-    loadArticle(await fetchWiki(wikiSimple.value, wikiTopic.value));
-    toast('已抓取，可读完后生成学习集');
+    const a = await fetchWiki(wikiSimple.value, wikiTopic.value);
+    archiveArticle(a);
+    loadArticle(a);
+    toast('已抓取并存进往期，可读完后生成学习集');
   } catch (err) {
     toast(friendlyError(err));
   } finally {
@@ -294,9 +304,14 @@ async function onFetchWiki(): Promise<void> {
 }
 
 function onAnalyze(): void {
-  if (!articleText.value.trim()) {
+  const text = articleText.value.trim();
+  if (!text) {
     toast('先把一段英文粘进来');
     return;
+  }
+  // 自己粘的长文也收进往期，之后能在历史里翻回来（短句不占位置）
+  if (text.length >= 200) {
+    archiveArticle({ title: '', text, source: '手动粘贴', url: '' });
   }
   from.value = null;
   analyze();
@@ -456,7 +471,10 @@ function formNote(): string {
           @click="startDaily(it)"
         >
           <span class="his-date">{{ it.date.slice(5) }}</span>
-          <span class="his-title">{{ it.title || it.source }}</span>
+          <span class="his-title">{{ it.titleZh || it.title || it.source }}</span>
+          <span v-if="it.note" class="his-tag">解析</span>
+          <span v-if="it.zh?.length" class="his-tag">译文</span>
+          <span v-if="it.quiz?.length" class="his-tag">题</span>
           <span class="his-meta">{{ it.words }} 词</span>
         </button>
       </div>
