@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 import type { Word } from '../types';
 import { deckWords } from './vocab';
 import { baseForms, splitArticle } from '../lib/lemmatize';
+import { fetchNews, fetchWiki } from '../lib/articles';
 
 /**
  * 阅读：粘贴一段英文 → 标出词库里出现过的词 → 用这些词开一轮学习。
@@ -127,4 +128,98 @@ export function pickPiece(p: ArticlePiece): void {
 
 export function closePick(): void {
   picked.value = null;
+}
+
+/* ------------------------------------------------------- 今日一篇 */
+
+export interface DailyItem {
+  /** `${日期}|${来源}|${难度}`，同一天同难度只保留一篇 */
+  key: string;
+  date: string;
+  title: string;
+  text: string;
+  source: string;
+  url: string;
+  words: number;
+  ts: number;
+}
+
+const DAILY_KEY = 'vocab-app.reading.daily';
+
+function readDaily(): DailyItem[] {
+  try {
+    const raw = localStorage.getItem(DAILY_KEY);
+    const list = raw ? (JSON.parse(raw) as DailyItem[]) : [];
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 往期文章，新的在前，最多留 40 篇 */
+export const dailyList = ref<DailyItem[]>(readDaily());
+
+function saveDaily(): void {
+  try {
+    localStorage.setItem(DAILY_KEY, JSON.stringify(dailyList.value));
+  } catch (err) {
+    console.warn('[reading] 保存往期文章失败', err);
+  }
+}
+
+function today(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 今日一篇的来源与难度（参考百词斩 MintDaily：一天一篇，难度可选） */
+export const dailySource = ref<'news' | 'wiki'>('news');
+export const newsLevel = ref<1 | 2 | 3>(1);
+export const wikiSimple = ref(true);
+
+function dailyKey(): string {
+  const lv =
+    dailySource.value === 'news'
+      ? `L${newsLevel.value}`
+      : wikiSimple.value
+        ? 'S'
+        : 'E';
+  return `${today()}|${dailySource.value}|${lv}`;
+}
+
+export function findDaily(): DailyItem | undefined {
+  const key = dailyKey();
+  return dailyList.value.find((it) => it.key === key);
+}
+
+/**
+ * 取「今日一篇」：当天 + 当前来源/难度已经有就直接返回，
+ * 没有（或 force）就现场抓一篇存进往期。
+ */
+export async function ensureDaily(force = false): Promise<DailyItem> {
+  const key = dailyKey();
+  if (!force) {
+    const found = dailyList.value.find((it) => it.key === key);
+    if (found) return found;
+  }
+
+  const a =
+    dailySource.value === 'news'
+      ? await fetchNews(newsLevel.value)
+      : await fetchWiki(wikiSimple.value);
+
+  const item: DailyItem = {
+    key,
+    date: today(),
+    title: a.title,
+    text: a.text,
+    source: a.source,
+    url: a.url,
+    words: a.text.split(/\s+/).filter(Boolean).length,
+    ts: Date.now(),
+  };
+  dailyList.value = [item, ...dailyList.value.filter((it) => it.key !== key)].slice(0, 40);
+  saveDaily();
+  return item;
 }

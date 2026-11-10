@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { state, deckWords } from '../store/vocab';
 import { session, startReadingSession, endSession } from '../store/session';
 import {
@@ -15,14 +15,16 @@ import {
   clearArticle,
   pickPiece,
   closePick,
+  dailyList,
+  dailySource,
+  newsLevel,
+  wikiSimple,
+  findDaily,
+  ensureDaily,
+  type DailyItem,
 } from '../store/reading';
 import { speak } from '../lib/speech';
-import {
-  fetchNews,
-  fetchWiki,
-  type FetchedArticle,
-  type NewsLevel,
-} from '../lib/articles';
+import { fetchWiki, type NewsLevel } from '../lib/articles';
 import { toast } from '../store/toast';
 import { setView } from '../store/ui';
 import StudySession from './StudySession.vue';
@@ -39,16 +41,19 @@ const inReadingSession = computed(
   () => !!session.current && session.current.mode === 'reading'
 );
 
-/* ------------------------------------------------------- 找文章 */
+/* ------------------------------------------------------- 今日一篇（DailyRead） */
 
 const NEWS_LEVELS: NewsLevel[] = [1, 2, 3];
-const fetching = ref<'' | 'news' | 'wiki'>('');
-const newsLevel = ref<NewsLevel>(1);
+const fetching = ref<'' | 'wiki'>('');
+const dailyLoading = ref(false);
 const wikiTopic = ref('');
-const wikiSimple = ref(true);
 const showSources = ref(false);
+const showHistory = ref(false);
 /** 这一篇是从哪来的，抓到后显示在文章上方 */
 const from = ref<{ label: string; url: string } | null>(null);
+
+/** 当前选中「来源 + 难度」对应的今日文章 */
+const current = computed(() => findDaily());
 
 /** 找文章网站清单：实在想自己挑的时候用 */
 const SOURCES = [
@@ -135,33 +140,62 @@ function friendlyError(err: unknown): string {
   return msg || '抓取失败，先手动复制一段吧';
 }
 
-function loadArticle(a: FetchedArticle): void {
+function loadArticle(a: { title: string; text: string; source: string; url: string }): void {
   articleText.value = a.text;
   from.value = { label: a.title ? `${a.title} · ${a.source}` : a.source, url: a.url };
   analyze();
-  toast(`已抓取：${a.title || a.source}`);
   void nextTick(() => {
     document.querySelector('.read-stats')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 }
 
-async function onFetchNews(): Promise<void> {
-  if (fetching.value) return;
-  fetching.value = 'news';
+/** 抓「今日一篇」；force = 换一篇 */
+async function onDaily(force: boolean): Promise<void> {
+  if (dailyLoading.value) return;
+  dailyLoading.value = true;
   try {
-    loadArticle(await fetchNews(newsLevel.value));
+    loadArticle(await ensureDaily(force));
   } catch (err) {
     toast(friendlyError(err));
   } finally {
-    fetching.value = '';
+    dailyLoading.value = false;
   }
 }
+
+function switchSource(s: 'news' | 'wiki'): void {
+  if (dailySource.value === s) return;
+  dailySource.value = s;
+  void onDaily(false);
+}
+
+function switchLevel(lv: NewsLevel): void {
+  if (dailySource.value !== 'news' || newsLevel.value === lv) return;
+  newsLevel.value = lv;
+  void onDaily(false);
+}
+
+function switchWikiMode(simple: boolean): void {
+  if (dailySource.value !== 'wiki' || wikiSimple.value === simple) return;
+  wikiSimple.value = simple;
+  void onDaily(false);
+}
+
+function startDaily(it: DailyItem): void {
+  loadArticle(it);
+  toast(`已打开：${it.title || it.source}`);
+}
+
+/** 进阅读页时，今天这篇还没抓就自动抓 */
+onMounted(() => {
+  if (!current.value) void onDaily(false);
+});
 
 async function onFetchWiki(): Promise<void> {
   if (fetching.value) return;
   fetching.value = 'wiki';
   try {
     loadArticle(await fetchWiki(wikiSimple.value, wikiTopic.value));
+    toast('已抓取，可读完后生成学习集');
   } catch (err) {
     toast(friendlyError(err));
   } finally {
@@ -216,6 +250,148 @@ function formNote(): string {
   <StudySession v-if="inReadingSession" />
 
   <template v-else>
+    <div class="panel daily-panel">
+      <div class="panel-head">
+        <h2>DailyRead <span class="daily-sub">每天更新</span></h2>
+        <span class="pager-info">学完词，来读一篇</span>
+      </div>
+
+      <div class="daily-card">
+        <div class="daily-banner">
+          <span class="daily-tag">
+            {{ dailySource === 'news' ? '📰 时事' : '📚 百科' }} · 今日
+          </span>
+          <div class="daily-title">
+            {{
+              dailyLoading && !current
+                ? '正在抓今天这篇文章…'
+                : current?.title || '今天这篇还没抓到，点「换一篇」试试'
+            }}
+          </div>
+        </div>
+
+        <div class="daily-meta">
+          <span class="daily-chip">{{ current ? `${current.words} 词` : '— 词' }}</span>
+          <span class="daily-chip">
+            {{ dailySource === 'news' ? `Level ${newsLevel}` : wikiSimple ? '简单英语' : '标准英语' }}
+          </span>
+          <span class="daily-chip dim">{{ current?.source || 'News in Levels / Wikipedia' }}</span>
+        </div>
+
+        <div class="daily-bar">
+          <div class="chips">
+            <button
+              class="chip"
+              :class="{ active: dailySource === 'news' }"
+              @click="switchSource('news')"
+            >
+              📰 新闻
+            </button>
+            <button
+              class="chip"
+              :class="{ active: dailySource === 'wiki' }"
+              @click="switchSource('wiki')"
+            >
+              📚 百科
+            </button>
+            <template v-if="dailySource === 'news'">
+              <button
+                v-for="lv in NEWS_LEVELS"
+                :key="lv"
+                class="chip"
+                :class="{ active: newsLevel === lv }"
+                @click="switchLevel(lv)"
+              >
+                L{{ lv }}
+              </button>
+            </template>
+            <template v-else>
+              <button
+                class="chip"
+                :class="{ active: wikiSimple }"
+                @click="switchWikiMode(true)"
+              >
+                简单
+              </button>
+              <button
+                class="chip"
+                :class="{ active: !wikiSimple }"
+                @click="switchWikiMode(false)"
+              >
+                标准
+              </button>
+            </template>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost" :disabled="dailyLoading" @click="onDaily(true)">
+              {{ dailyLoading ? '抓取中…' : '换一篇' }}
+            </button>
+            <button
+              class="btn primary"
+              :disabled="!current"
+              @click="current && startDaily(current)"
+            >
+              开始阅读
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="daily-extra">
+        <input
+          v-model="wikiTopic"
+          class="search find-input"
+          placeholder="或在维基百科搜话题，如 coffee / space / Rome"
+          @keydown.enter.prevent="onFetchWiki"
+        />
+        <button class="btn" :disabled="!!fetching || dailyLoading" @click="onFetchWiki">
+          {{ fetching ? '抓取中…' : '搜这篇' }}
+        </button>
+      </div>
+
+      <button class="find-toggle" @click="showHistory = !showHistory">
+        {{ showHistory ? '收起往期' : `查看往期 · 已存 ${dailyList.length} 篇` }}
+      </button>
+      <div v-if="showHistory" class="daily-history">
+        <p v-if="!dailyList.length" class="find-d">
+          还没有往期。抓到第一篇后，每天的文章都会留在这里，随时点开重读。
+        </p>
+        <button
+          v-for="it in dailyList.slice(0, 30)"
+          :key="it.key"
+          class="his-item"
+          @click="startDaily(it)"
+        >
+          <span class="his-date">{{ it.date.slice(5) }}</span>
+          <span class="his-title">{{ it.title || it.source }}</span>
+          <span class="his-meta">{{ it.words }} 词</span>
+        </button>
+      </div>
+
+      <button class="find-toggle" @click="showSources = !showSources">
+        {{ showSources ? '收起网站清单' : '想自己挑？这 10 个网站最好用' }}
+      </button>
+
+      <div v-if="showSources" class="src-list">
+        <a
+          v-for="s in SOURCES"
+          :key="s.url"
+          class="src-item"
+          :href="s.url"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <b>{{ s.name }}</b>
+          <span class="src-lv" :class="s.tone">{{ s.level }}</span>
+          <span class="src-d">{{ s.note }}</span>
+        </a>
+        <p class="src-tip">
+          复制不了文字时：Safari 点地址栏左边的「显示阅读器」，Chrome 用 Ctrl/⌘ + A 全选再复制；
+          或者直接在上面点「换一篇」，程序会自己把正文扒干净。
+        </p>
+      </div>
+    </div>
+
     <div class="panel">
       <div class="panel-head">
         <h2>阅读 · 从文章里遇到单词</h2>
@@ -243,83 +419,6 @@ function formNote(): string {
             {{ analyzed ? '重新分析' : '分析' }}
           </button>
         </div>
-      </div>
-    </div>
-
-    <div class="panel find-panel">
-      <div class="panel-head">
-        <h2>找文章</h2>
-        <span class="pager-info">没有素材？点一下抓一篇</span>
-      </div>
-      <p class="hint">
-        不用自己到处搜。左边是每天更新的真实新闻（同一篇有三个难度），右边是维基百科——可以搜你感兴趣的话题，也可以随机。
-        抓到后自动分析，不满意再点一次。
-      </p>
-
-      <div class="find-grid">
-        <div class="find-card">
-          <div class="find-t">今日新闻 <span>News in Levels</span></div>
-          <p class="find-d">真实新闻用简单英语改写，每条约 60 词，一分钟读完。</p>
-          <div class="chips">
-            <button
-              v-for="lv in NEWS_LEVELS"
-              :key="lv"
-              class="chip"
-              :class="{ active: newsLevel === lv }"
-              @click="newsLevel = lv"
-            >
-              Level {{ lv }}
-            </button>
-          </div>
-          <button class="btn" :disabled="!!fetching" @click="onFetchNews">
-            {{ fetching === 'news' ? '抓取中…' : '抓一条新闻' }}
-          </button>
-        </div>
-
-        <div class="find-card">
-          <div class="find-t">维基百科 <span>Wikipedia</span></div>
-          <p class="find-d">搜一个你感兴趣的话题，或者什么都不填直接随机；一篇约 250 词。</p>
-          <input
-            v-model="wikiTopic"
-            class="search find-input"
-            placeholder="话题，如 coffee / space / Rome"
-            @keydown.enter.prevent="onFetchWiki"
-          />
-          <div class="chips">
-            <button class="chip" :class="{ active: wikiSimple }" @click="wikiSimple = true">
-              简单英语
-            </button>
-            <button class="chip" :class="{ active: !wikiSimple }" @click="wikiSimple = false">
-              标准英语
-            </button>
-          </div>
-          <button class="btn" :disabled="!!fetching" @click="onFetchWiki">
-            {{ fetching === 'wiki' ? '抓取中…' : wikiTopic.trim() ? '搜这个词条' : '随便来一篇' }}
-          </button>
-        </div>
-      </div>
-
-      <button class="find-toggle" @click="showSources = !showSources">
-        {{ showSources ? '收起网站清单' : '想自己挑？这 10 个网站最好用' }}
-      </button>
-
-      <div v-if="showSources" class="src-list">
-        <a
-          v-for="s in SOURCES"
-          :key="s.url"
-          class="src-item"
-          :href="s.url"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <b>{{ s.name }}</b>
-          <span class="src-lv" :class="s.tone">{{ s.level }}</span>
-          <span class="src-d">{{ s.note }}</span>
-        </a>
-        <p class="src-tip">
-          复制不了文字时：Safari 点地址栏左边的「显示阅读器」，Chrome 用 Ctrl/⌘ + A 全选再复制；
-          或者直接在上面点「抓一条」，程序会自己把正文扒干净。
-        </p>
       </div>
     </div>
 
