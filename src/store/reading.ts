@@ -2,26 +2,22 @@ import { computed, ref } from 'vue';
 import type { Word } from '../types';
 import { state, deckWords } from './vocab';
 import { baseForms, splitArticle } from '../lib/lemmatize';
-import { fetchNews, fetchWiki } from '../lib/articles';
-import { resolveConfig, translateParas, generateQuiz, type ArticleNote, type QuizQuestion } from '../lib/ai';
+import {
+  resolveConfig,
+  translateParas,
+  generateQuiz,
+  generatePassage,
+  type ArticleNote,
+  type CetLevel,
+  type QuizQuestion,
+} from '../lib/ai';
 
 /**
- * 阅读：粘贴一段英文 → 标出词库里出现过的词 → 用这些词开一轮学习。
- * 全部本地计算，不联网；文章存 localStorage，刷新后还在。
+ * 阅读：每天一篇四六级仿真阅读（AI 命题，自带 5 道题）→
+ * 标出词库里出现过的词 → 用这些词开一轮学习。全部本地判分，不联网。
  */
 
-const TEXT_KEY = 'vocab-app.reading.text';
-
-function readSaved(): string {
-  try {
-    return localStorage.getItem(TEXT_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-export const articleText = ref<string>(readSaved());
-/** 点「分析」后才渲染高亮，避免边打字边闪 */
+/** 当前打开的文章正文 */
 export const article = ref<string>('');
 export const analyzed = computed(() => article.value.trim().length > 0);
 /** 生成学习集时是否包含已掌握的词 */
@@ -29,19 +25,11 @@ export const includeMastered = ref(false);
 /** 当前点开的词 */
 export const picked = ref<{ surface: string; word: Word | null } | null>(null);
 
-function saveText(text: string): void {
-  try {
-    localStorage.setItem(TEXT_KEY, text);
-  } catch (err) {
-    console.warn('[reading] 保存文章失败', err);
-  }
-}
-
-export function analyze(text = articleText.value): void {
+/** 打开一篇文章（抓取 / 往期都走这里） */
+export function analyze(text: string): void {
   const t = text.trim();
   article.value = t;
   picked.value = null;
-  saveText(t);
   hydrate(t);
 }
 
@@ -62,18 +50,6 @@ function hydrate(text: string): void {
   const qs = it?.quiz ?? null;
   quiz.value = qs;
   quizPicks.value = qs ? qs.map((_, i) => it?.quizPicks?.[i] ?? -1) : [];
-}
-
-export function clearArticle(): void {
-  articleText.value = '';
-  article.value = '';
-  picked.value = null;
-  note.value = null;
-  paraZh.value = [];
-  zhOpen.value = [];
-  quiz.value = null;
-  quizPicks.value = [];
-  saveText('');
 }
 
 /* ------------------------------------------------------- AI 精读 */
@@ -314,19 +290,14 @@ export function archiveArticle(a: {
   saveDaily();
 }
 
-/** 今日一篇的来源与难度（参考百词斩 MintDaily：一天一篇，难度可选） */
-export const dailySource = ref<'news' | 'wiki'>('news');
-export const newsLevel = ref<1 | 2 | 3>(1);
-export const wikiSimple = ref(true);
+/** 今日一篇的难度：四级 / 六级 */
+export const cetLevel = ref<CetLevel>('cet4');
+
+/** 主题（可选）：留空由模型自己挑，避免篇篇一个调子 */
+export const cetTopic = ref('');
 
 function dailyKey(): string {
-  const lv =
-    dailySource.value === 'news'
-      ? `L${newsLevel.value}`
-      : wikiSimple.value
-        ? 'S'
-        : 'E';
-  return `${today()}|${dailySource.value}|${lv}`;
+  return `${today()}|cet|${cetLevel.value}`;
 }
 
 export function findDaily(): DailyItem | undefined {
@@ -335,8 +306,8 @@ export function findDaily(): DailyItem | undefined {
 }
 
 /**
- * 取「今日一篇」：当天 + 当前来源/难度已经有就直接返回，
- * 没有（或 force）就现场抓一篇存进往期。
+ * 取「今日一篇」：当天 + 当前难度已经有就直接返回，
+ * 没有（或 force）就让模型现场写一篇，连同 5 道题一起存进往期。
  */
 export async function ensureDaily(force = false): Promise<DailyItem> {
   const key = dailyKey();
@@ -345,20 +316,27 @@ export async function ensureDaily(force = false): Promise<DailyItem> {
     if (found) return found;
   }
 
-  const a =
-    dailySource.value === 'news'
-      ? await fetchNews(newsLevel.value)
-      : await fetchWiki(wikiSimple.value);
+  const cfg = ensureConfig();
+  const p = await generatePassage({
+    level: cetLevel.value,
+    topic: cetTopic.value,
+    config: cfg,
+  });
 
+  const text = p.paras.join('\n\n');
   const item: DailyItem = {
     key,
     date: today(),
-    title: a.title,
-    text: a.text,
-    source: a.source,
-    url: a.url,
-    words: a.text.split(/\s+/).filter(Boolean).length,
+    title: p.title,
+    titleZh: p.titleZh,
+    text,
+    source: `AI 仿真题 · ${cetLevel.value === 'cet4' ? 'CET-4' : 'CET-6'}${p.topic ? ` · ${p.topic}` : ''}`,
+    url: '',
+    words: text.split(/\s+/).filter(Boolean).length,
     ts: Date.now(),
+    // 自带的题目直接落盘，打开就能做，不用再点一次「阅读理解」
+    quiz: p.questions,
+    quizPicks: p.questions.map(() => -1),
   };
   dailyList.value = [item, ...dailyList.value.filter((it) => it.key !== key)].slice(0, 40);
   saveDaily();

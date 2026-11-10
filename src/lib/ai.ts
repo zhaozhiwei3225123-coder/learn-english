@@ -121,10 +121,11 @@ function httpError(status: number, detail: string): AiError {
 async function chat(
   cfg: AiConfig,
   payload: Record<string, unknown>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs = TIMEOUT_MS
 ): Promise<string> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const onAbort = () => ctrl.abort();
   signal?.addEventListener('abort', onAbort);
 
@@ -555,6 +556,147 @@ export async function generateQuiz(
     throw new AiError('模型没有出够可用的题目，请再试一次');
   }
   return qs;
+}
+
+/* ---------------------------------------------------------------- 四六级仿真阅读 */
+
+export type CetLevel = 'cet4' | 'cet6';
+
+export const CET_LEVELS: { key: CetLevel; label: string; hint: string; words: number }[] = [
+  { key: 'cet4', label: '四级 CET-4', hint: '约 300 词，句子中等长度', words: 300 },
+  { key: 'cet6', label: '六级 CET-6', hint: '约 400 词，长句和抽象词更多', words: 400 },
+];
+
+export interface GeneratedPassage {
+  /** 英文标题 */
+  title: string;
+  /** 中文标题 */
+  titleZh: string;
+  topic: string;
+  /** 按自然段切好的正文 */
+  paras: string[];
+  questions: QuizQuestion[];
+}
+
+/** 题材：不填就让模型自己轮换，避免篇篇都是同一个调子 */
+export const CET_TOPICS = [
+  '科普',
+  '教育',
+  '心理',
+  '环境',
+  '科技',
+  '商业',
+  '健康',
+  '文化',
+];
+
+/**
+ * 生成一篇四六级真题风格的阅读理解（文章 + 5 道题，一次请求搞定）。
+ *
+ * 和抓百科的区别：百科是「定义式」的词条，句子短、没有论点，读起来不像考试；
+ * 这里直接让模型按命题思路写——先抛现象或研究，再给论据，最后收束，并配上
+ * 主旨 / 细节 / 词义 / 推断 / 态度五类题，和四六级阅读的套路一致。
+ */
+export async function generatePassage(opts: {
+  level: CetLevel;
+  topic?: string;
+  config: AiConfig;
+  count?: number;
+  signal?: AbortSignal;
+}): Promise<GeneratedPassage> {
+  const { level, config, signal } = opts;
+  const count = opts.count ?? 5;
+  const spec = CET_LEVELS.find((l) => l.key === level) ?? CET_LEVELS[0];
+  const topic = (opts.topic || '').trim();
+
+  const prompt = [
+    `你是中国大学英语四六级考试的命题老师，现在要写一篇仿真阅读理解（${spec.label}）。`,
+    '',
+    '文章要求：',
+    `1. 长度约 ${spec.words} 词，分 3~5 个自然段。`,
+    level === 'cet4'
+      ? '2. 词汇以四级大纲词为主，可含极少量六级词；句子中等长度，不要通篇长难句。'
+      : '2. 可用六级大纲词汇；句子里有明显的长句、插入语、抽象名词，接近六级真题的密度。',
+    '3. 结构要像真题：开头引入一个现象、研究或争议，中间给论据或例子，结尾收束到作者观点。',
+    '4. 不要写成百科词条式的定义罗列，不要分点，不要小标题，不要出现中文。',
+    '5. 允许引用虚构的研究或专家说法，但读起来要自然可信。',
+    topic
+      ? `6. 主题：${topic}。`
+      : '6. 主题：从科普、教育、心理、环境、科技、商业、健康、文化里挑一个，不要每次都是同一个。',
+    '',
+    `题目要求（共 ${count} 道，四选一）：`,
+    '1. 题干和选项全英文，只考这篇文章，不能靠常识答对。',
+    `2. 题型要有区分度：至少各一道主旨题、细节题、词义猜测题、推断题，其余的考作者态度或段落作用。`,
+    '3. 干扰项要像真题那样「看似对但细节错」，不要明显荒谬。',
+    '4. answer 是正确选项下标 0~3，正确答案不要都落在同一位置。',
+    '5. explain 用中文，40 字以内，说清依据原文哪一句。',
+    '6. 题干一行以内，每个选项不超过 15 个词。',
+    '',
+    '输出 JSON（正文按自然段放进 paras 数组，不要用换行符）：',
+    '{"title":"英文标题","titleZh":"中文标题","topic":"主题","paras":["第一段","第二段"],',
+    `"qs":[{"q":"...","options":["A内容","B内容","C内容","D内容"],"answer":0,"explain":"..."}]}`,
+    `qs 必须正好 ${count} 个。`,
+  ].join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 0.9,
+      max_tokens: 3000,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    signal,
+    120_000
+  );
+
+  const o = extractJson(content) as Record<string, unknown>;
+
+  const paras = (Array.isArray(o.paras) ? o.paras : [])
+    .map((p) => str(p, 2000))
+    .filter((p) => p.length > 0)
+    .slice(0, 8);
+
+  // 有的模型会把整篇塞进一个字符串，这里兼容一下
+  const fallback = str(o.text, 8000);
+  const body = paras.length >= 2 ? paras : fallback.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+
+  const words = body.join(' ').split(/\s+/).filter(Boolean).length;
+  if (words < 120) throw new AiError('模型这次写的文章太短，再试一次');
+
+  const questions: QuizQuestion[] = (Array.isArray(o.qs) ? o.qs : [])
+    .map((it) => {
+      const x = (it || {}) as Record<string, unknown>;
+      const options = (Array.isArray(x.options) ? x.options : [])
+        .map((op) => str(op, 120))
+        .filter(Boolean)
+        .slice(0, 4);
+      const ans = Number(x.answer);
+      return {
+        q: str(x.q, 300),
+        options,
+        answer: Number.isInteger(ans) && ans >= 0 && ans < options.length ? ans : -1,
+        explain: str(x.explain, 200),
+      };
+    })
+    .filter((q) => q.q && q.options.length === 4 && q.answer >= 0)
+    .slice(0, count);
+
+  if (questions.length < Math.min(3, count)) {
+    throw new AiError('题目没生成全，再点一次换一篇');
+  }
+
+  const title = str(o.title, 120);
+  return {
+    title,
+    titleZh: str(o.titleZh, 60),
+    topic: str(o.topic, 20),
+    paras: body,
+    questions,
+  };
 }
 
 /* ---------------------------------------------------------------- 连接测试 */

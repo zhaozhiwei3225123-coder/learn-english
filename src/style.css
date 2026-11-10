@@ -2077,6 +2077,27 @@ textarea:focus {
 .daily-extra .btn {
   white-space: nowrap;
 }
+/* 主题输入与题材快选（AI 命题用） */
+.daily-topic {
+  display: flex;
+  gap: 8px;
+  padding: 0 14px;
+}
+.daily-topic .search {
+  flex: 1;
+  min-width: 0;
+}
+.daily-topic .btn {
+  white-space: nowrap;
+}
+.topic-chips {
+  flex-wrap: wrap;
+  padding: 8px 14px 0;
+}
+.daily-chip.accent {
+  background: #eaf1ff;
+  color: #2f6bff;
+}
 .daily-history {
   display: flex;
   flex-direction: column;
@@ -2435,4 +2456,25 @@ textarea:focus {
   .quiz-op {
     font-size: 14px;
   }
+}
+
+/* 抓取失败提示 */
+.daily-err {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid #f3d6c4;
+  border-radius: 10px;
+  background: #fdf6f1;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #a4552c;
+}
+.daily-err .mini-btn {
+  flex: none;
+  padding: 2px 12px;
+  font-size: 12px;
 }

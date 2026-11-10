@@ -3,7 +3,6 @@ import { computed, nextTick, onMounted, ref } from 'vue';
 import { state, deckWords, addEntries } from '../store/vocab';
 import { session, startReadingSession, endSession } from '../store/session';
 import {
-  articleText,
   article,
   analyzed,
   paraGroups,
@@ -25,14 +24,11 @@ import {
   includeMastered,
   picked,
   analyze,
-  clearArticle,
-  archiveArticle,
   pickPiece,
   closePick,
   dailyList,
-  dailySource,
-  newsLevel,
-  wikiSimple,
+  cetLevel,
+  cetTopic,
   findDaily,
   ensureDaily,
   note,
@@ -41,18 +37,20 @@ import {
   type DailyItem,
 } from '../store/reading';
 import { speak } from '../lib/speech';
-import { fetchWiki, type NewsLevel } from '../lib/articles';
-import { annotateArticle, hasApiKey, resolveConfig } from '../lib/ai';
+import {
+  annotateArticle,
+  hasApiKey,
+  resolveConfig,
+  CET_LEVELS,
+  CET_TOPICS,
+  type CetLevel,
+} from '../lib/ai';
 import { toast } from '../store/toast';
-import { setView } from '../store/ui';
 import StudySession from './StudySession.vue';
 
 const showPicked = computed(() => !!picked.value);
 const unmasteredCount = computed(
   () => studyWords.value.filter((w) => w.group !== 'mastered').length
-);
-const sampleText = ref(
-  'Paste any English here — an article, a podcast transcript, a page from a book.'
 );
 
 const inReadingSession = computed(
@@ -61,16 +59,15 @@ const inReadingSession = computed(
 
 /* ------------------------------------------------------- 今日一篇（DailyRead） */
 
-const NEWS_LEVELS: NewsLevel[] = [1, 2, 3];
-const fetching = ref<'' | 'wiki'>('');
 const dailyLoading = ref(false);
-const wikiTopic = ref('');
+/** 生成失败的原因，直接显示在卡片上，不用去翻 toast */
+const dailyError = ref('');
 const showSources = ref(false);
 const showHistory = ref(false);
 /** 这一篇是从哪来的，抓到后显示在文章上方 */
 const from = ref<{ label: string; url: string } | null>(null);
 
-/** 当前选中「来源 + 难度」对应的今日文章 */
+/** 当前难度的今日文章 */
 const current = computed(() => findDaily());
 
 /** 找文章网站清单：实在想自己挑的时候用 */
@@ -148,53 +145,45 @@ const SOURCES = [
 ];
 
 function friendlyError(err: unknown): string {
-  if (err instanceof DOMException && err.name === 'AbortError') {
-    return '抓取超时，网络慢或者源站卡住了，再点一次';
-  }
   const msg = err instanceof Error ? err.message : '';
   if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
-    return '连不上这个源，先手动复制一段（下面有网站清单）';
+    return '连不上 DeepSeek 接口，检查下网络再试';
   }
-  return msg || '抓取失败，先手动复制一段吧';
+  return msg || '这篇没生成成功，再点一次试试';
 }
 
-function loadArticle(a: { title: string; text: string; source: string; url: string }): void {
-  articleText.value = a.text;
-  from.value = { label: a.title ? `${a.title} · ${a.source}` : a.source, url: a.url };
-  analyze();
+function loadArticle(a: DailyItem): void {
+  const name = a.titleZh || a.title || a.source;
+  from.value = { label: `${name} · ${a.source}`, url: a.url };
+  analyze(a.text);
   void nextTick(() => {
     document.querySelector('.read-stats')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 }
 
-/** 抓「今日一篇」；force = 换一篇 */
+/** 生成 / 换一篇；force = 不管今天有没有，都重新写一篇 */
 async function onDaily(force: boolean): Promise<void> {
   if (dailyLoading.value) return;
+  if (!hasApiKey()) {
+    dailyError.value = '要先生成文章，得在「设置」里填 DeepSeek API Key';
+    return;
+  }
   dailyLoading.value = true;
+  dailyError.value = '';
   try {
-    loadArticle(await ensureDaily(force));
+    const it = await ensureDaily(force);
+    loadArticle(it);
+    toast(`已生成：${it.titleZh || it.title}（自带 ${it.quiz?.length ?? 0} 道题）`);
   } catch (err) {
-    toast(friendlyError(err));
+    dailyError.value = friendlyError(err);
   } finally {
     dailyLoading.value = false;
   }
 }
 
-function switchSource(s: 'news' | 'wiki'): void {
-  if (dailySource.value === s) return;
-  dailySource.value = s;
-  void onDaily(false);
-}
-
-function switchLevel(lv: NewsLevel): void {
-  if (dailySource.value !== 'news' || newsLevel.value === lv) return;
-  newsLevel.value = lv;
-  void onDaily(false);
-}
-
-function switchWikiMode(simple: boolean): void {
-  if (dailySource.value !== 'wiki' || wikiSimple.value === simple) return;
-  wikiSimple.value = simple;
+function switchLevel(lv: CetLevel): void {
+  if (cetLevel.value === lv) return;
+  cetLevel.value = lv;
   void onDaily(false);
 }
 
@@ -208,9 +197,9 @@ function startDaily(it: DailyItem): void {
   );
 }
 
-/** 进阅读页时，今天这篇还没抓就自动抓 */
+/** 进阅读页时，今天这篇还没生成就自动生成一篇 */
 onMounted(() => {
-  if (!current.value) void onDaily(false);
+  if (!current.value && hasApiKey()) void onDaily(false);
 });
 
 /* ------------------------------------------------------- AI 精读 */
@@ -288,39 +277,13 @@ async function onMakeQuiz(): Promise<void> {
   }
 }
 
-async function onFetchWiki(): Promise<void> {
-  if (fetching.value) return;
-  fetching.value = 'wiki';
-  try {
-    const a = await fetchWiki(wikiSimple.value, wikiTopic.value);
-    archiveArticle(a);
-    loadArticle(a);
-    toast('已抓取并存进往期，可读完后生成学习集');
-  } catch (err) {
-    toast(friendlyError(err));
-  } finally {
-    fetching.value = '';
-  }
-}
-
-function onAnalyze(): void {
-  const text = articleText.value.trim();
-  if (!text) {
-    toast('先把一段英文粘进来');
+/** 已经有题就滚到题目，没有才现场出题 */
+function onQuizAction(): void {
+  if (quiz.value?.length) {
+    document.querySelector('.quiz-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
-  // 自己粘的长文也收进往期，之后能在历史里翻回来（短句不占位置）
-  if (text.length >= 200) {
-    archiveArticle({ title: '', text, source: '手动粘贴', url: '' });
-  }
-  from.value = null;
-  analyze();
-}
-
-function onClear(): void {
-  clearArticle();
-  articleText.value = '';
-  from.value = null;
+  void onMakeQuiz();
 }
 
 function onStart(): void {
@@ -357,20 +320,18 @@ function formNote(): string {
   <template v-else>
     <div class="panel daily-panel">
       <div class="panel-head">
-        <h2>DailyRead <span class="daily-sub">每天更新</span></h2>
-        <span class="pager-info">学完词，来读一篇</span>
+        <h2>DailyRead <span class="daily-sub">每天一篇</span></h2>
+        <span class="pager-info">四六级仿真阅读 · 文章自带 5 道题</span>
       </div>
 
       <div class="daily-card">
         <div class="daily-banner">
-          <span class="daily-tag">
-            {{ dailySource === 'news' ? '📰 时事' : '📚 百科' }} · 今日
-          </span>
+          <span class="daily-tag">🎯 {{ cetLevel === 'cet4' ? 'CET-4' : 'CET-6' }} · 今日</span>
           <div class="daily-title">
             {{
               dailyLoading && !current
-                ? '正在抓今天这篇文章…'
-                : current?.titleZh || current?.title || '今天这篇还没抓到，点「换一篇」试试'
+                ? '正在按考试风格写这一篇…'
+                : current?.titleZh || current?.title || '今天这篇还没生成，点「写一篇」'
             }}
           </div>
           <div v-if="current?.titleZh && current.title" class="daily-title-en">
@@ -380,59 +341,28 @@ function formNote(): string {
 
         <div class="daily-meta">
           <span class="daily-chip">{{ current ? `${current.words} 词` : '— 词' }}</span>
-          <span class="daily-chip">
-            {{ dailySource === 'news' ? `Level ${newsLevel}` : wikiSimple ? '简单英语' : '标准英语' }}
+          <span class="daily-chip">{{ cetLevel === 'cet4' ? '四级难度' : '六级难度' }}</span>
+          <span v-if="current?.quiz?.length" class="daily-chip accent">
+            自带 {{ current.quiz.length }} 题
           </span>
-          <span class="daily-chip dim">{{ current?.source || 'News in Levels / Wikipedia' }}</span>
+          <span class="daily-chip dim">{{ current?.source || 'AI 仿真题' }}</span>
         </div>
 
         <div class="daily-bar">
           <div class="chips">
             <button
+              v-for="lv in CET_LEVELS"
+              :key="lv.key"
               class="chip"
-              :class="{ active: dailySource === 'news' }"
-              @click="switchSource('news')"
+              :class="{ active: cetLevel === lv.key }"
+              @click="switchLevel(lv.key)"
             >
-              📰 新闻
+              {{ lv.label }}
             </button>
-            <button
-              class="chip"
-              :class="{ active: dailySource === 'wiki' }"
-              @click="switchSource('wiki')"
-            >
-              📚 百科
-            </button>
-            <template v-if="dailySource === 'news'">
-              <button
-                v-for="lv in NEWS_LEVELS"
-                :key="lv"
-                class="chip"
-                :class="{ active: newsLevel === lv }"
-                @click="switchLevel(lv)"
-              >
-                L{{ lv }}
-              </button>
-            </template>
-            <template v-else>
-              <button
-                class="chip"
-                :class="{ active: wikiSimple }"
-                @click="switchWikiMode(true)"
-              >
-                简单
-              </button>
-              <button
-                class="chip"
-                :class="{ active: !wikiSimple }"
-                @click="switchWikiMode(false)"
-              >
-                标准
-              </button>
-            </template>
           </div>
           <div class="btn-row">
             <button class="btn ghost" :disabled="dailyLoading" @click="onDaily(true)">
-              {{ dailyLoading ? '抓取中…' : '换一篇' }}
+              {{ dailyLoading ? '抓取中…' : current ? '换一篇' : '再抓一次' }}
             </button>
             <button
               class="btn primary"
@@ -443,18 +373,34 @@ function formNote(): string {
             </button>
           </div>
         </div>
-      </div>
 
-      <div class="daily-extra">
-        <input
-          v-model="wikiTopic"
-          class="search find-input"
-          placeholder="或在维基百科搜话题，如 coffee / space / Rome"
-          @keydown.enter.prevent="onFetchWiki"
-        />
-        <button class="btn" :disabled="!!fetching || dailyLoading" @click="onFetchWiki">
-          {{ fetching ? '抓取中…' : '搜这篇' }}
-        </button>
+        <div class="daily-topic">
+          <input
+            v-model="cetTopic"
+            class="search find-input"
+            placeholder="想读什么主题？如 睡眠 / 城市交通 / 人工智能，留空随机"
+            @keydown.enter.prevent="onDaily(true)"
+          />
+          <button class="btn" :disabled="dailyLoading" @click="onDaily(true)">按主题写</button>
+        </div>
+        <div class="chips topic-chips">
+          <button
+            v-for="t in CET_TOPICS"
+            :key="t"
+            class="chip"
+            :class="{ active: cetTopic === t }"
+            @click="cetTopic = cetTopic === t ? '' : t"
+          >
+            {{ t }}
+          </button>
+        </div>
+
+        <p v-if="dailyError" class="daily-err">
+          ⚠️ {{ dailyError }}
+          <button class="btn ghost mini-btn" :disabled="dailyLoading" @click="onDaily(true)">
+            重试
+          </button>
+        </p>
       </div>
 
       <button class="find-toggle" @click="showHistory = !showHistory">
@@ -462,7 +408,7 @@ function formNote(): string {
       </button>
       <div v-if="showHistory" class="daily-history">
         <p v-if="!dailyList.length" class="find-d">
-          还没有往期。抓到第一篇后，每天的文章都会留在这里，随时点开重读。
+          还没有往期。生成第一篇后，每天的文章、译文和题目都会留在这里，随时点开重做。
         </p>
         <button
           v-for="it in dailyList.slice(0, 30)"
@@ -497,39 +443,9 @@ function formNote(): string {
           <span class="src-d">{{ s.note }}</span>
         </a>
         <p class="src-tip">
-          复制不了文字时：Safari 点地址栏左边的「显示阅读器」，Chrome 用 Ctrl/⌘ + A 全选再复制；
-          或者直接在上面点「换一篇」，程序会自己把正文扒干净。
+          每日一篇是按四六级命题思路现写的；想读真实材料（外刊、慢速新闻、分级读物）就从上面这些站点自己挑，
+          复制正文粘到别处也能读——只是现在 App 里不再自动抓词条了。
         </p>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head">
-        <h2>阅读 · 从文章里遇到单词</h2>
-        <span class="pager-info">粘贴后自动标出词库里已有的词</span>
-      </div>
-      <p class="hint">
-        把一段英文粘进下面的框，点「分析」后会标出词库里出现过的词——<b>琥珀色是还没掌握的</b>，灰色是已掌握。
-        点任意单词可以看释义、听发音，然后把文中这些词一键组成一轮学习集（学完照常进入间隔复习）。
-      </p>
-
-      <textarea
-        v-model="articleText"
-        class="read-input"
-        rows="7"
-        :placeholder="sampleText"
-        @keydown.meta.enter.prevent="onAnalyze"
-        @keydown.ctrl.enter.prevent="onAnalyze"
-      />
-
-      <div class="read-bar">
-        <span class="coach-tip">⌘/Ctrl + Enter 分析 · 文章会保存在本机</span>
-        <div class="btn-row">
-          <button v-if="analyzed" class="btn ghost" @click="onClear">清空</button>
-          <button class="btn primary" @click="onAnalyze">
-            {{ analyzed ? '重新分析' : '分析' }}
-          </button>
-        </div>
       </div>
     </div>
 
@@ -541,6 +457,10 @@ function formNote(): string {
           <span class="read-legend know">已掌握 {{ readingStats.mastered }}</span>
         </div>
       </div>
+
+      <p class="hint">
+        <b>琥珀色是还没掌握的词</b>，灰色是已掌握。点任意单词看释义、听发音；滑到底部是这篇文章的阅读理解题，选完立刻判分并给中文解析。
+      </p>
 
       <p v-if="from" class="article-src">
         <span>来源：{{ from.label }}</span>
@@ -554,8 +474,14 @@ function formNote(): string {
         <button class="btn ghost" :disabled="zhLoading" @click="onTranslateAll">
           {{ zhLoading ? '翻译中…' : paraZh.length ? '🌐 全部译文' : '🌐 中文翻译' }}
         </button>
-        <button class="btn ghost" :disabled="quizLoading" @click="onMakeQuiz">
-          {{ quizLoading ? '出题中…' : quiz ? '🔁 再出 5 题' : '📝 阅读理解' }}
+        <button class="btn ghost" :disabled="quizLoading" @click="onQuizAction">
+          {{
+            quizLoading
+              ? '出题中…'
+              : quiz
+                ? `📝 去做题 · ${quiz.length} 题`
+                : '📝 阅读理解'
+          }}
         </button>
         <span v-if="!hasApiKey()" class="coach-tip">需要在「设置」里填 DeepSeek API Key 才能用这些功能</span>
       </div>
@@ -659,6 +585,9 @@ function formNote(): string {
             {{ quizDone ? `得分 ${quizScore} / ${quiz.length}` : '选出你认为对的选项，选完立刻判分' }}
           </span>
           <button class="btn ghost" @click="resetQuiz">重做</button>
+          <button class="btn ghost" :disabled="quizLoading" @click="onMakeQuiz">
+            {{ quizLoading ? '出题中…' : '换一批题' }}
+          </button>
         </div>
 
         <div v-for="(q, qi) in quiz" :key="qi" class="quiz-q">
@@ -708,7 +637,10 @@ function formNote(): string {
 
     <div v-if="!analyzed" class="panel">
       <div class="empty">
-        还没有分析文章。{{ deckWords.length ? `当前词库有 ${deckWords.length} 个词，能匹配到多少？粘一段试试。` : '先导入词库效果更好。' }}
+        还没有今天的文章。点上面的「写一篇」——会按
+        {{ cetLevel === 'cet4' ? '四级' : '六级' }}难度写一篇约
+        {{ cetLevel === 'cet4' ? 300 : 400 }} 词的阅读，并配好 5 道题。
+        {{ deckWords.length ? `当前词库有 ${deckWords.length} 个词，生成后能看到命中多少。` : '先导入词库，标词才准。' }}
       </div>
     </div>
   </template>
