@@ -62,6 +62,44 @@ export interface Settings {
   reviewDelayDays: number;
   ttsEngine: TtsEngine;
   kokoroVoice: string;
+  /** AI 批改接口地址（OpenAI 兼容，默认 DeepSeek） */
+  aiBaseUrl: string;
+  /** 模型名 */
+  aiModel: string;
+}
+
+/** AI 指出的一个问题点 */
+export interface SentenceIssue {
+  /** 语法 / 搭配 / 用词 / 拼写 / 标点 */
+  type: string;
+  /** 原句里的错误片段 */
+  bad: string;
+  /** 建议改成的写法 */
+  good: string;
+  /** 中文说明 */
+  why: string;
+}
+
+/** 造句练习难度 */
+export type SentenceLevel = 'basic' | 'intermediate' | 'advanced';
+
+/** 一次中译英练习：题面、参考译文、我的译文和批改结果都存在一起 */
+export interface SentenceAttempt {
+  id: string;
+  /** 中文原句 */
+  zh: string;
+  /** AI 给的参考译文 */
+  reference: string;
+  /** 我写的英文 */
+  text: string;
+  /** AI 修正后的句子 */
+  corrected: string;
+  issues: SentenceIssue[];
+  comment: string;
+  score: number;
+  theme: string;
+  level: SentenceLevel;
+  at: number;
 }
 
 export interface AppState {
@@ -73,6 +111,8 @@ export interface AppState {
   words: Word[];
   logs: LogEntry[];
   imports: ImportRecord[];
+  /** 造句练习记录（最新在前），与词库无关 */
+  sentenceAttempts: SentenceAttempt[];
   createdAt: number;
 }
 
@@ -105,6 +145,13 @@ export interface StudySession {
   vague: number;
 }
 
-export type ViewName = 'today' | 'review' | 'decks' | 'words' | 'import' | 'settings';
+export type ViewName =
+  | 'today'
+  | 'review'
+  | 'decks'
+  | 'words'
+  | 'import'
+  | 'writing'
+  | 'settings';
 export type WordFilter = 'all' | 'new' | 'review' | 'mastered' | 'wrong';
 export type StudyMode = 'full' | 'new-only' | 'review-only' | 'dictation';

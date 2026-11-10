@@ -16,10 +16,48 @@ import { endSession } from '../store/session';
 import { toast } from '../store/toast';
 import { kokoroState, speakKokoro } from '../lib/kokoro';
 import { todayKey } from '../lib/date';
+import { getApiKey, resolveConfig, setApiKey, testConnection } from '../lib/ai';
 
 const backupInput = ref<HTMLInputElement | null>(null);
 const testingKokoro = ref(false);
 const newDeckName = ref('');
+
+/* ---------------------------------------------------------- AI 批改 */
+const apiKeyInput = ref(getApiKey());
+const hasKey = ref(!!getApiKey());
+const showKey = ref(false);
+const testingAi = ref(false);
+const aiState = ref('');
+
+function onSaveKey() {
+  setApiKey(apiKeyInput.value);
+  hasKey.value = !!getApiKey();
+  apiKeyInput.value = getApiKey();
+  aiState.value = '';
+  toast(hasKey.value ? 'API Key 已保存在本机' : '已清除 API Key');
+}
+
+async function onTestAi() {
+  const cfg = resolveConfig(state.settings, apiKeyInput.value);
+  if (!cfg) {
+    toast('先填一个 API Key');
+    return;
+  }
+  testingAi.value = true;
+  aiState.value = '';
+  try {
+    const msg = await testConnection(cfg);
+    setApiKey(apiKeyInput.value);
+    hasKey.value = true;
+    aiState.value = msg;
+    toast('连接正常，可以开始造句批改了');
+  } catch (err) {
+    aiState.value = (err as Error).message;
+    toast((err as Error).message, 3600);
+  } finally {
+    testingAi.value = false;
+  }
+}
 
 /* ---------------------------------------------------------- 词库管理 */
 
@@ -244,6 +282,61 @@ function onClearAll() {
       </button>
       <span class="hint" style="margin: 0; align-self: center">{{ kokoroState.text }}</span>
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>AI 造句练习</h2>
+    <p class="hint">
+      「造句」页由 DeepSeek 实时出题（中文句子），你写英文，它按「意思准确 / 语法 / 地道程度」打分并逐条指出问题。
+      浏览器直连接口，不需要后端；Key 只保存在本机浏览器，<b>不会写进导出的备份文件</b>。
+      每句约消耗几百 token，按 DeepSeek 官方计费。
+    </p>
+    <div class="form-grid">
+      <label class="field">
+        <span>API Key{{ hasKey ? '（已配置）' : '' }}</span>
+        <input
+          v-model="apiKeyInput"
+          :type="showKey ? 'text' : 'password'"
+          placeholder="sk-..."
+          autocomplete="off"
+          spellcheck="false"
+          @change="onSaveKey"
+        />
+      </label>
+      <label class="field">
+        <span>接口地址</span>
+        <input
+          v-model="state.settings.aiBaseUrl"
+          placeholder="https://api.deepseek.com"
+          spellcheck="false"
+          @change="onSettingChange"
+        />
+      </label>
+      <label class="field">
+        <span>模型</span>
+        <input
+          v-model="state.settings.aiModel"
+          placeholder="deepseek-chat"
+          spellcheck="false"
+          @change="onSettingChange"
+        />
+      </label>
+      <label class="field checkbox">
+        <input v-model="showKey" type="checkbox" />
+        <span>显示 Key</span>
+      </label>
+    </div>
+    <div class="btn-row">
+      <button class="btn" @click="onSaveKey">保存 Key</button>
+      <button class="btn primary" :disabled="testingAi" @click="onTestAi">
+        {{ testingAi ? '测试中…' : '测试连接' }}
+      </button>
+      <span class="hint inline">{{ aiState || (hasKey ? 'Key 已保存' : '尚未配置 Key') }}</span>
+    </div>
+    <p class="hint">
+      也支持任何 OpenAI 兼容接口：把「接口地址」换成如 <code>https://api.openai.com/v1</code>，
+      模型填对应名称即可。
+    </p>
   </div>
 
   <div class="panel">

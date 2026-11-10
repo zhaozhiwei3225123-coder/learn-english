@@ -4,6 +4,7 @@ import type {
   ImportRecord,
   LogEntry,
   ParsedEntry,
+  SentenceAttempt,
   Settings,
   StudyKind,
   Word,
@@ -31,6 +32,8 @@ export const DEFAULT_SETTINGS: Settings = {
   reviewDelayDays: 2,
   ttsEngine: 'kokoro',
   kokoroVoice: 'af_heart',
+  aiBaseUrl: 'https://api.deepseek.com',
+  aiModel: 'deepseek-chat',
 };
 
 /** 学完的新词进入复习队列的间隔天数（默认 2 天，限制 1~60） */
@@ -56,6 +59,7 @@ export function emptyState(): AppState {
     words: [],
     logs: [],
     imports: [],
+    sentenceAttempts: [],
     createdAt: Date.now(),
   };
 }
@@ -118,6 +122,9 @@ export function normalizeState(raw: unknown): AppState {
     words,
     logs: Array.isArray(s.logs) ? (s.logs as LogEntry[]) : [],
     imports: Array.isArray(s.imports) ? (s.imports as ImportRecord[]) : [],
+    sentenceAttempts: Array.isArray(s.sentenceAttempts)
+      ? (s.sentenceAttempts as SentenceAttempt[]).filter((x) => x && x.zh && x.text).slice(0, 2000)
+      : [],
     createdAt: s.createdAt || Date.now(),
   };
 }

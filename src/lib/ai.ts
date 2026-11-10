@@ -1,0 +1,354 @@
+import type { SentenceIssue, SentenceLevel, Settings } from '../types';
+
+/**
+ * AI 造句练习：调用 OpenAI 兼容接口（默认 DeepSeek）。
+ * 纯前端直连——DeepSeek 的 CORS 允许浏览器请求，静态站点也能用，不需要后端。
+ * 不预置题库：每道题实时向模型要，做完的句子才存进本地记录。
+ * API Key 只存在本机 localStorage，不进 IndexedDB 状态，也不会被「导出备份」带走。
+ */
+
+const KEY_STORAGE = 'vocab-app.ai.key';
+const TIMEOUT_MS = 60_000;
+
+export const AI_DEFAULT_BASE = 'https://api.deepseek.com';
+export const AI_DEFAULT_MODEL = 'deepseek-chat';
+
+export function getApiKey(): string {
+  try {
+    return localStorage.getItem(KEY_STORAGE) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setApiKey(key: string): void {
+  try {
+    const v = key.trim();
+    if (v) localStorage.setItem(KEY_STORAGE, v);
+    else localStorage.removeItem(KEY_STORAGE);
+  } catch (err) {
+    console.warn('[ai] 保存 API Key 失败', err);
+  }
+}
+
+export function hasApiKey(): boolean {
+  return !!getApiKey();
+}
+
+export interface AiConfig {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
+/** 从设置里取接口配置；没填 Key 时返回 null */
+export function resolveConfig(settings: Settings, key = getApiKey()): AiConfig | null {
+  const apiKey = key.trim();
+  if (!apiKey) return null;
+  return {
+    baseUrl: (settings.aiBaseUrl || AI_DEFAULT_BASE).trim().replace(/\/+$/, ''),
+    model: (settings.aiModel || AI_DEFAULT_MODEL).trim(),
+    apiKey,
+  };
+}
+
+export class AiError extends Error {
+  status: number;
+  constructor(message: string, status = 0) {
+    super(message);
+    this.name = 'AiError';
+    this.status = status;
+  }
+}
+
+const SYSTEM_PROMPT = [
+  '你是英语教学助手，服务对象是中文母语的英语学习者。',
+  '严格只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释性文字。',
+].join('\n');
+
+export const SENTENCE_THEMES = [
+  '日常',
+  '工作',
+  '学习',
+  '旅行',
+  '观点',
+  '情绪',
+  '社交',
+  '科技',
+] as const;
+
+export const SENTENCE_LEVELS: { key: SentenceLevel; label: string; hint: string }[] = [
+  { key: 'basic', label: '入门', hint: '8~12 词，简单句和常见连词' },
+  { key: 'intermediate', label: '进阶', hint: '12~18 词，含从句或非谓语' },
+  { key: 'advanced', label: '挑战', hint: '16~25 词，含倒装、虚拟或复杂从句' },
+];
+
+function endpoint(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}${path}`;
+}
+
+/** 从可能带 ``` 围栏或前后说明文字的内容里抠出 JSON */
+function extractJson(raw: string): unknown {
+  const text = String(raw || '').trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : text;
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new AiError('模型返回的内容不是 JSON，请重试');
+  try {
+    return JSON.parse(body.slice(start, end + 1));
+  } catch {
+    throw new AiError('模型返回的 JSON 解析失败，请重试');
+  }
+}
+
+function str(v: unknown, max = 600): string {
+  return typeof v === 'string' ? v.trim().slice(0, max) : '';
+}
+
+/** 把 HTTP 状态码翻译成能看懂的提示 */
+function httpError(status: number, detail: string): AiError {
+  const tail = detail ? `：${detail.slice(0, 160)}` : '';
+  if (status === 401) return new AiError('API Key 无效或已失效，请到设置里重新填写', status);
+  if (status === 402) return new AiError('账户余额不足，请先充值', status);
+  if (status === 403) return new AiError('接口拒绝访问（403），请检查 Key 权限', status);
+  if (status === 404) return new AiError('接口地址不存在，请检查「接口地址」是否填对', status);
+  if (status === 429) return new AiError('请求太频繁或已达限额，稍等一会儿再试', status);
+  if (status >= 500) return new AiError(`模型服务暂时不可用（${status}），稍后再试`, status);
+  return new AiError(`请求失败（${status}）${tail}`, status);
+}
+
+async function chat(
+  cfg: AiConfig,
+  payload: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<string> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const onAbort = () => ctrl.abort();
+  signal?.addEventListener('abort', onAbort);
+
+  try {
+    const res = await fetch(endpoint(cfg.baseUrl, '/chat/completions'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({ model: cfg.model, ...payload }),
+      signal: ctrl.signal,
+    });
+
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const j = (await res.json()) as { error?: { message?: string } };
+        detail = j?.error?.message || JSON.stringify(j);
+      } catch {
+        detail = await res.text().catch(() => '');
+      }
+      throw httpError(res.status, detail);
+    }
+
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) throw new AiError('模型没有返回内容，请重试');
+    return content;
+  } catch (err) {
+    if (err instanceof AiError) throw err;
+    if ((err as Error)?.name === 'AbortError') {
+      throw new AiError(signal?.aborted ? '已取消' : '请求超时，请检查网络后重试');
+    }
+    throw new AiError('网络请求失败，可能是网络不通或接口地址有误');
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+/* ---------------------------------------------------------------- 出题 */
+
+export interface GenerateOptions {
+  theme: string;
+  level: SentenceLevel;
+  config: AiConfig;
+  /** 最近做过的中文句子，避免重复出题 */
+  recent?: string[];
+  signal?: AbortSignal;
+}
+
+export interface GeneratedSentence {
+  zh: string;
+  en: string;
+}
+
+/** 实时向模型要一道中译英题（中文提示 + 参考译文） */
+export async function generateSentence(opts: GenerateOptions): Promise<GeneratedSentence> {
+  const { theme, level, config, recent = [], signal } = opts;
+  const levelMeta = SENTENCE_LEVELS.find((x) => x.key === level) || SENTENCE_LEVELS[1];
+  const avoid = recent
+    .slice(0, 40)
+    .map((zh) => `- ${zh}`)
+    .join('\n');
+
+  const prompt = [
+    `请出 1 道中译英练习题，主题「${theme}」，难度「${levelMeta.label}」（${levelMeta.hint}）。`,
+    '',
+    '要求：',
+    '1. 中文是日常真的会说出口或写出来的话，不要生硬拼凑，不要出现人名以外的专有名词。',
+    '2. 英文译文地道自然，是母语者会写的版本，不要逐字直译。',
+    avoid ? `3. 不要和下面这些做过的题重复：\n${avoid}` : '',
+    '',
+    '输出 JSON：{"zh":"中文原句","en":"参考英文译文"}',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 1.0,
+      max_tokens: 600,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    signal
+  );
+
+  const o = extractJson(content) as Record<string, unknown>;
+  const zh = str(o.zh, 200);
+  const en = str(o.en, 300);
+  if (!zh || !en) throw new AiError('模型没有返回可用的题目，请重试');
+  return { zh, en };
+}
+
+/* ---------------------------------------------------------------- 批改 */
+
+export interface GradeOptions {
+  zh: string;
+  /** 参考译文，作为意思是否译全的基准 */
+  reference: string;
+  /** 学生的英文 */
+  answer: string;
+  config: AiConfig;
+  signal?: AbortSignal;
+}
+
+export interface GradeResult {
+  score: number;
+  corrected: string;
+  issues: SentenceIssue[];
+  comment: string;
+}
+
+/** 批改一句中译英 */
+export async function gradeTranslation(opts: GradeOptions): Promise<GradeResult> {
+  const { zh, reference, answer, config, signal } = opts;
+
+  const prompt = [
+    `中文原句：${zh}`,
+    `参考译文：${reference}`,
+    `学生译文：${answer}`,
+    '',
+    '批改标准：',
+    '1. 意思准确性 60 分：信息是否译全，有没有漏译、误译、多余添加。',
+    '2. 语法 25 分：时态、单复数、冠词、介词、词性、句子结构。',
+    '3. 地道程度 15 分：是否符合英语习惯，而不是中文直译。',
+    '',
+    'corrected 要在学生译文基础上做最小必要修改，保留学生自己的用词习惯，不要直接照抄参考译文。',
+    'score 是 0~100 的整数。',
+    '',
+    '输出 JSON：',
+    '{',
+    '  "score": 83,',
+    '  "corrected": "修改后的完整英文句子",',
+    '  "issues": [{"type": "漏译|语法|用词|搭配|拼写", "bad": "学生译文里的问题片段", "good": "建议写法", "why": "中文一句话说明"}],',
+    '  "comment": "35 字以内的中文总评，指出最值得改进的一点"',
+    '}',
+    'issues 最多 3 条；没有明显问题就给空数组，不要为了凑数编造问题。',
+  ].join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 0.2,
+      max_tokens: 900,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    signal
+  );
+
+  const o = extractJson(content) as Record<string, unknown>;
+  const corrected = str(o.corrected);
+  if (!corrected) throw new AiError('模型没有返回批改结果，请重试');
+
+  const issues: SentenceIssue[] = Array.isArray(o.issues)
+    ? o.issues
+        .map((it) => {
+          const x = (it || {}) as Record<string, unknown>;
+          return {
+            type: str(x.type, 12) || '问题',
+            bad: str(x.bad, 200),
+            good: str(x.good, 200),
+            why: str(x.why, 200),
+          };
+        })
+        .filter((x) => x.bad || x.good || x.why)
+        .slice(0, 3)
+    : [];
+
+  const scoreRaw = Number(o.score);
+  return {
+    score: Number.isFinite(scoreRaw) ? Math.max(0, Math.min(100, Math.round(scoreRaw))) : 0,
+    corrected,
+    issues,
+    comment: str(o.comment, 200),
+  };
+}
+
+/* ---------------------------------------------------------------- 连接测试 */
+
+/** 测试配置是否可用：先查 /models（不消耗 token），不行再用一次极小的对话 */
+export async function testConnection(config: AiConfig): Promise<string> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    const res = await fetch(endpoint(config.baseUrl, '/models'), {
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+      signal: ctrl.signal,
+    });
+    if (res.ok) {
+      const d = (await res.json()) as { data?: { id?: string }[] };
+      const ids = (d?.data || []).map((m) => m.id).filter(Boolean) as string[];
+      if (ids.length && !ids.includes(config.model)) {
+        throw new AiError(
+          `Key 可用，但接口里没有模型「${config.model}」，可用：${ids.slice(0, 4).join('、')}`
+        );
+      }
+      return '连接正常';
+    }
+    if (res.status === 401) throw new AiError('API Key 无效或已失效', 401);
+    if (res.status === 404) throw new AiError('接口地址不存在，请检查「接口地址」', 404);
+    if (res.status >= 400) {
+      await chat(config, {
+        max_tokens: 4,
+        messages: [{ role: 'user', content: 'ping' }],
+      });
+      return '连接正常';
+    }
+    return '连接正常';
+  } catch (err) {
+    if (err instanceof AiError) throw err;
+    if ((err as Error)?.name === 'AbortError') throw new AiError('连接超时，请检查网络');
+    throw new AiError('网络请求失败，请检查网络或接口地址');
+  } finally {
+    clearTimeout(timer);
+  }
+}

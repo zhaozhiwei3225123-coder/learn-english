@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue';
-import type { AppState, Deck, LogEntry, ParsedEntry, Word } from '../types';
+import type { AppState, Deck, LogEntry, ParsedEntry, SentenceRecord, Word } from '../types';
 import * as persist from '../lib/persist';
 import { todayKey } from '../lib/date';
 import { isDue, isMastered } from '../lib/srs';
@@ -251,6 +251,7 @@ export function clearAll(settings: AppState['settings']): void {
   state.words = [];
   state.logs = [];
   state.imports = [];
+  state.sentenceAttempts = [];
   state.decks = [persist.defaultDeck()];
   state.activeDeckId = persist.DEFAULT_DECK_ID;
   state.settings = { ...settings };
@@ -265,5 +266,6 @@ export async function replaceAll(raw: unknown): Promise<void> {
   state.words = next.words;
   state.logs = next.logs;
   state.imports = next.imports;
+  state.sentenceAttempts = next.sentenceAttempts;
   state.createdAt = next.createdAt;
 }
