@@ -201,6 +201,7 @@ onMounted(() => {
         v-if="writeMode === 'fill' && currentPrompt"
         :zh="currentPrompt.zh"
         :en="currentPrompt.en"
+        :phrases="currentPrompt.phrases"
         @next="onNext"
         @skip="onNext"
       />
@@ -254,6 +255,16 @@ onMounted(() => {
           <div class="res-block">
             <div class="res-label">参考译文</div>
             <p class="res-text ref">{{ lastResult.reference }}</p>
+          </div>
+
+          <div v-if="lastResult.phrases?.length" class="res-block">
+            <div class="res-label">词组 / 句型</div>
+            <ul class="phrase-list">
+              <li v-for="(p, i) in lastResult.phrases" :key="i" class="phrase-item">
+                <span class="phrase-en">{{ p.en }}</span>
+                <span class="phrase-zh">{{ p.zh }}</span>
+              </li>
+            </ul>
           </div>
 
           <ul v-if="lastResult.issues.length" class="res-issues">
@@ -312,6 +323,17 @@ onMounted(() => {
               <div class="res-label">参考译文</div>
               <p class="res-text ref">{{ a.reference }}</p>
             </div>
+
+            <div v-if="a.phrases?.length" class="res-block">
+              <div class="res-label">词组 / 句型</div>
+              <ul class="phrase-list">
+                <li v-for="(p, i) in a.phrases" :key="i" class="phrase-item">
+                  <span class="phrase-en">{{ p.en }}</span>
+                  <span class="phrase-zh">{{ p.zh }}</span>
+                </li>
+              </ul>
+            </div>
+
             <ul v-if="a.issues.length" class="res-issues">
               <li v-for="(it, i) in a.issues" :key="i">
                 <div class="issue-line">

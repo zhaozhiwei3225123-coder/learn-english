@@ -68,6 +68,12 @@ export interface Settings {
   aiModel: string;
 }
 
+/** 句子里的词组 / 固定搭配 / 句型标注 */
+export interface PhraseNote {
+  en: string;
+  zh: string;
+}
+
 /** AI 指出的一个问题点 */
 export interface SentenceIssue {
   /** 语法 / 搭配 / 用词 / 拼写 / 标点 */
@@ -101,6 +107,8 @@ export interface SentenceAttempt {
   level: SentenceLevel;
   /** 练习形式：free = 整句自由写 AI 批改；fill = 逐词填空本地判分 */
   mode?: 'free' | 'fill';
+  /** 这句话里的词组 / 句型（出题时由 AI 顺带给出） */
+  phrases?: PhraseNote[];
   at: number;
 }
 

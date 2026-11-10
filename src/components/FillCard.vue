@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import type { PhraseNote } from '../types';
 import { judgeFill, normalizeWord, tokenizeFill, type FillBlankResult } from '../lib/fillJudge';
 import { recordFillAttempt } from '../store/writing';
 import { toast } from '../store/toast';
@@ -8,6 +9,8 @@ const props = defineProps<{
   zh: string;
   /** 参考英文译文（挖空依据） */
   en: string;
+  /** 这句话里的词组 / 句型（检查后才显示，避免提前泄露） */
+  phrases?: PhraseNote[];
 }>();
 
 const emit = defineEmits<{
@@ -230,6 +233,16 @@ onMounted(() => focusBlank(0));
       <div class="res-block">
         <div class="res-label">完整句子</div>
         <p class="res-text ref">{{ props.en }}</p>
+      </div>
+
+      <div v-if="props.phrases?.length" class="res-block">
+        <div class="res-label">词组 / 句型</div>
+        <ul class="phrase-list">
+          <li v-for="(p, i) in props.phrases" :key="i" class="phrase-item">
+            <span class="phrase-en">{{ p.en }}</span>
+            <span class="phrase-zh">{{ p.zh }}</span>
+          </li>
+        </ul>
       </div>
 
       <div class="coach-again">

@@ -1,4 +1,4 @@
-import type { SentenceIssue, SentenceLevel, Settings } from '../types';
+import type { PhraseNote, SentenceIssue, SentenceLevel, Settings } from '../types';
 
 /**
  * AI 造句练习：调用 OpenAI 兼容接口（默认 DeepSeek）。
@@ -180,6 +180,8 @@ export interface GenerateOptions {
 export interface GeneratedSentence {
   zh: string;
   en: string;
+  /** 这句话里的词组 / 固定搭配 / 句型（0~3 个） */
+  phrases: PhraseNote[];
 }
 
 /** 实时向模型要一道中译英题（中文提示 + 参考译文） */
@@ -197,9 +199,14 @@ export async function generateSentence(opts: GenerateOptions): Promise<Generated
     '要求：',
     '1. 中文是日常真的会说出口或写出来的话，不要生硬拼凑，不要出现人名以外的专有名词。',
     '2. 英文译文地道自然，是母语者会写的版本，不要逐字直译。',
-    avoid ? `3. 不要和下面这些做过的题重复：\n${avoid}` : '',
+    '3. 译文里最好包含 1~2 个值得记的词组、固定搭配或句型（如 do the dishes 洗碗、look forward to 期待、',
+    '   not only...but also 不仅…而且），把它们单独列出来。',
+    avoid ? `4. 不要和下面这些做过的题重复：\n${avoid}` : '',
     '',
-    '输出 JSON：{"zh":"中文原句","en":"参考英文译文"}',
+    '输出 JSON：',
+    '{"zh":"中文原句","en":"参考英文译文","phrases":[{"en":"do the dishes","zh":"洗碗"}]}',
+    'phrases 给 0~3 个，是译文里真实出现的词组/搭配/句型，en 原样截取译文片段（可与译文形式略有差异，',
+    '如译文是 doing the dishes，词组按词典形 do the dishes），zh 给简短中文意思。',
   ]
     .filter(Boolean)
     .join('\n');
@@ -222,7 +229,18 @@ export async function generateSentence(opts: GenerateOptions): Promise<Generated
   const zh = str(o.zh, 200);
   const en = str(o.en, 300);
   if (!zh || !en) throw new AiError('模型没有返回可用的题目，请重试');
-  return { zh, en };
+
+  const phrases: PhraseNote[] = Array.isArray(o.phrases)
+    ? o.phrases
+        .map((p) => {
+          const x = (p || {}) as Record<string, unknown>;
+          return { en: str(x.en, 80), zh: str(x.zh, 60) };
+        })
+        .filter((p) => p.en && p.zh)
+        .slice(0, 3)
+    : [];
+
+  return { zh, en, phrases };
 }
 
 /* ---------------------------------------------------------------- 批改 */

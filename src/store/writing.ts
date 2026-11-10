@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue';
-import type { SentenceAttempt, SentenceLevel } from '../types';
+import type { PhraseNote, SentenceAttempt, SentenceLevel } from '../types';
 import { state, save } from './vocab';
 import {
   generateSentence,
@@ -16,7 +16,11 @@ export const writingLevel = ref<SentenceLevel>('intermediate');
 export const writeMode = ref<'free' | 'fill'>('free');
 
 /** 当前这道题（切到别的页签再回来还在） */
-export const currentPrompt = ref<{ zh: string; en: string } | null>(null);
+export const currentPrompt = ref<{
+  zh: string;
+  en: string;
+  phrases: PhraseNote[];
+} | null>(null);
 export const generating = ref(false);
 export const grading = ref(false);
 export const writingError = ref('');
@@ -106,6 +110,8 @@ export async function submitAnswer(
       score: g.score,
       theme: writingTheme.value,
       level: writingLevel.value,
+      mode: 'free',
+      phrases: prompt.phrases,
       at: Date.now(),
     };
     state.sentenceAttempts.unshift(record);
@@ -144,6 +150,7 @@ export function recordFillAttempt(result: {
     theme: writingTheme.value,
     level: writingLevel.value,
     mode: 'fill',
+    phrases: prompt.phrases,
     at: Date.now(),
   };
   state.sentenceAttempts.unshift(record);
