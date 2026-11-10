@@ -3,6 +3,7 @@ import type { Word } from '../types';
 import { deckWords } from './vocab';
 import { baseForms, splitArticle } from '../lib/lemmatize';
 import { fetchNews, fetchWiki } from '../lib/articles';
+import type { ArticleNote } from '../lib/ai';
 
 /**
  * 阅读：粘贴一段英文 → 标出词库里出现过的词 → 用这些词开一轮学习。
@@ -41,13 +42,37 @@ export function analyze(text = articleText.value): void {
   article.value = t;
   picked.value = null;
   saveText(t);
+  note.value = notes.get(t) ?? null;
 }
 
 export function clearArticle(): void {
   articleText.value = '';
   article.value = '';
   picked.value = null;
+  note.value = null;
   saveText('');
+}
+
+/* ------------------------------------------------------- AI 精读 */
+
+/** 精读结果只在内存里按正文缓存，切回同一篇不用再花 token */
+const notes = new Map<string, ArticleNote>();
+
+export const note = ref<ArticleNote | null>(null);
+export const noteLoading = ref(false);
+
+export function setNote(n: ArticleNote | null): void {
+  note.value = n;
+  if (n && article.value) notes.set(article.value, n);
+  if (n?.titleZh) attachTitleZh(article.value, n.titleZh);
+}
+
+/** 把 AI 起的中文标题写回往期条目，卡片上就能显示中文标题 */
+function attachTitleZh(text: string, titleZh: string): void {
+  const hit = dailyList.value.find((it) => it.text === text);
+  if (!hit || hit.titleZh === titleZh) return;
+  hit.titleZh = titleZh;
+  saveDaily();
 }
 
 /* ---------------------------------------------------------------- 匹配 */
@@ -137,6 +162,8 @@ export interface DailyItem {
   key: string;
   date: string;
   title: string;
+  /** AI 起的中文标题（有就优先显示） */
+  titleZh?: string;
   text: string;
   source: string;
   url: string;

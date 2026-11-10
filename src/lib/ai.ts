@@ -331,6 +331,107 @@ export async function gradeTranslation(opts: GradeOptions): Promise<GradeResult>
   };
 }
 
+/* ---------------------------------------------------------------- 精读导读 */
+
+export interface ArticleWord {
+  word: string;
+  ipa: string;
+  zh: string;
+}
+
+export interface ArticleNote {
+  /** 中文标题，像杂志标题 */
+  titleZh: string;
+  /** 主题标签：时事 / 科技 / 自然… */
+  topic: string;
+  /** 一句话中文导读 */
+  summary: string;
+  /** 值得记的生词 */
+  words: ArticleWord[];
+  /** 长难句解析，短文可能没有 */
+  sentence: { en: string; zh: string; note: string } | null;
+}
+
+export interface AnnotateOptions {
+  text: string;
+  config: AiConfig;
+  signal?: AbortSignal;
+}
+
+/**
+ * 给一篇文章写中文标题 / 主题 / 导读 / 生词 / 长难句，
+ * 相当于把抓来的生文章加工成「外刊精读」的样子。
+ */
+export async function annotateArticle(opts: AnnotateOptions): Promise<ArticleNote> {
+  const { text, config, signal } = opts;
+  const body = text.trim().slice(0, 4000);
+
+  const prompt = [
+    '下面是一篇英语短文。请以中文英语学习刊物的编辑身份，为它写一段精读导读。',
+    '',
+    '要求：',
+    '1. titleZh：中文标题，10~18 字，像杂志标题，准确不夸张。',
+    '2. topic：2~4 字的主题标签，如 时事 / 科技 / 自然 / 健康 / 文化 / 商业 / 生活。',
+    '3. summary：一句话中文导读，40 字以内，讲清这篇写了什么、为什么值得读。',
+    '4. words：从原文里挑 3~6 个对中文中级学习者有价值的词。不要挑人名、地名、机构名，',
+    '   不要挑 the / of / is 这类功能词。每项给：word（原文中的词典形，小写）、',
+    '   ipa（美式音标，只写符号，不要斜杠）、zh（10 字以内中文释义）。',
+    '5. sentence：挑原文里信息量最大或结构最绕的一句，给 en（原句照抄，不改写）、',
+    '   zh（中文翻译）、note（50 字以内的结构或用法提示）。原文太短就返回 null。',
+    '',
+    '只输出 JSON：',
+    '{"titleZh":"","topic":"","summary":"","words":[{"word":"","ipa":"","zh":""}],"sentence":{"en":"","zh":"","note":""}}',
+    '',
+    '原文：',
+    body,
+  ].join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 0.4,
+      max_tokens: 1200,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    signal
+  );
+
+  const o = extractJson(content) as Record<string, unknown>;
+
+  const words: ArticleWord[] = Array.isArray(o.words)
+    ? o.words
+        .map((it) => {
+          const x = (it || {}) as Record<string, unknown>;
+          return {
+            word: str(x.word, 40).toLowerCase(),
+            ipa: str(x.ipa, 40).replace(/^\/+|\/+$/g, ''),
+            zh: str(x.zh, 40),
+          };
+        })
+        .filter((w) => w.word && w.zh)
+        .slice(0, 6)
+    : [];
+
+  const rawSentence = o.sentence as Record<string, unknown> | null | undefined;
+  const sentence =
+    rawSentence && str(rawSentence.en)
+      ? {
+          en: str(rawSentence.en, 400),
+          zh: str(rawSentence.zh, 400),
+          note: str(rawSentence.note, 200),
+        }
+      : null;
+
+  const titleZh = str(o.titleZh, 40);
+  if (!titleZh && !words.length) throw new AiError('模型没有返回可用的导读，请重试');
+
+  return { titleZh, topic: str(o.topic, 8), summary: str(o.summary, 120), words, sentence };
+}
+
 /* ---------------------------------------------------------------- 连接测试 */
 
 /** 测试配置是否可用：先查 /models（不消耗 token），不行再用一次极小的对话 */

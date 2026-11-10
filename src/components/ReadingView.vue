@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { state, deckWords } from '../store/vocab';
+import { state, deckWords, addEntries } from '../store/vocab';
 import { session, startReadingSession, endSession } from '../store/session';
 import {
   articleText,
@@ -21,10 +21,14 @@ import {
   wikiSimple,
   findDaily,
   ensureDaily,
+  note,
+  noteLoading,
+  setNote,
   type DailyItem,
 } from '../store/reading';
 import { speak } from '../lib/speech';
 import { fetchWiki, type NewsLevel } from '../lib/articles';
+import { annotateArticle, hasApiKey, resolveConfig } from '../lib/ai';
 import { toast } from '../store/toast';
 import { setView } from '../store/ui';
 import StudySession from './StudySession.vue';
@@ -190,6 +194,44 @@ onMounted(() => {
   if (!current.value) void onDaily(false);
 });
 
+/* ------------------------------------------------------- AI 精读 */
+
+async function onAnnotate(): Promise<void> {
+  if (noteLoading.value) return;
+  if (!article.value.trim()) {
+    toast('先载入一篇才能精读');
+    return;
+  }
+  const cfg = resolveConfig(state.settings);
+  if (!cfg) {
+    toast('先到「设置 → AI 造句练习」填 DeepSeek API Key');
+    return;
+  }
+  noteLoading.value = true;
+  try {
+    const n = await annotateArticle({ text: article.value, config: cfg });
+    setNote(n);
+    toast(n.titleZh ? `精读完成：${n.titleZh}` : '精读完成');
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '精读失败，稍后再试');
+  } finally {
+    noteLoading.value = false;
+  }
+}
+
+/** 把 AI 挑的生词直接加进当前词库 */
+function addNoteWords(): void {
+  const n = note.value;
+  if (!n?.words.length) return;
+  const res = addEntries(
+    n.words.map((w) => ({ word: w.word, meaning: w.zh, ipa: w.ipa })),
+    '阅读精读'
+  );
+  toast(
+    `已加进词库：新增 ${res.added} 个${res.skipped ? `，跳过 ${res.skipped} 个已有` : ''}`
+  );
+}
+
 async function onFetchWiki(): Promise<void> {
   if (fetching.value) return;
   fetching.value = 'wiki';
@@ -265,8 +307,11 @@ function formNote(): string {
             {{
               dailyLoading && !current
                 ? '正在抓今天这篇文章…'
-                : current?.title || '今天这篇还没抓到，点「换一篇」试试'
+                : current?.titleZh || current?.title || '今天这篇还没抓到，点「换一篇」试试'
             }}
+          </div>
+          <div v-if="current?.titleZh && current.title" class="daily-title-en">
+            {{ current.title }}
           </div>
         </div>
 
@@ -435,6 +480,48 @@ function formNote(): string {
         <span>来源：{{ from.label }}</span>
         <a v-if="from.url" :href="from.url" target="_blank" rel="noopener noreferrer">看原文 ↗</a>
       </p>
+
+      <div class="ai-read-bar">
+        <button class="btn ghost" :disabled="noteLoading" @click="onAnnotate">
+          {{ noteLoading ? 'AI 正在读…' : note ? '✨ 重新精读' : '✨ AI 精读' }}
+        </button>
+        <span class="coach-tip">
+          {{
+            hasApiKey()
+              ? '生成中文标题、一句话导读、3~6 个生词和长难句解析'
+              : '需要在「设置」里填 DeepSeek API Key 才能用'
+          }}
+        </span>
+      </div>
+
+      <div v-if="note" class="note-card">
+        <div class="note-head">
+          <span class="daily-chip">{{ note.topic || '精读' }}</span>
+          <b class="note-title">{{ note.titleZh || '精读笔记' }}</b>
+        </div>
+        <p v-if="note.summary" class="note-sum">{{ note.summary }}</p>
+
+        <div v-if="note.words.length" class="note-words">
+          <div v-for="w in note.words" :key="w.word" class="note-word">
+            <b>{{ w.word }}</b>
+            <span v-if="w.ipa" class="ipa">/{{ w.ipa }}/</span>
+            <span class="nw-zh">{{ w.zh }}</span>
+            <button class="icon-btn mini" title="朗读" @click="onSpeak({ word: w.word })">
+              🔊
+            </button>
+          </div>
+        </div>
+        <div v-if="note.words.length" class="note-actions">
+          <button class="btn ghost" @click="addNoteWords">把这 {{ note.words.length }} 个生词加进词库</button>
+        </div>
+
+        <div v-if="note.sentence" class="note-sent">
+          <div class="ns-tag">长难句</div>
+          <div class="ns-en">{{ note.sentence.en }}</div>
+          <div class="ns-zh">{{ note.sentence.zh }}</div>
+          <div v-if="note.sentence.note" class="ns-note">{{ note.sentence.note }}</div>
+        </div>
+      </div>
 
       <div class="read-stats">
         <span>全文 <b>{{ readingStats.total }}</b> 词</span>
