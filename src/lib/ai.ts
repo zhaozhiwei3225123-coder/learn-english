@@ -432,6 +432,131 @@ export async function annotateArticle(opts: AnnotateOptions): Promise<ArticleNot
   return { titleZh, topic: str(o.topic, 8), summary: str(o.summary, 120), words, sentence };
 }
 
+/* ---------------------------------------------------------------- 段落翻译 */
+
+/**
+ * 逐段把英语文章翻成中文。一次请求翻完所有段落，比每段单发省 token 也更快。
+ * texts 的顺序就是返回译文的顺序。
+ */
+export async function translateParas(
+  texts: string[],
+  config: AiConfig,
+  signal?: AbortSignal
+): Promise<string[]> {
+  if (!texts.length) return [];
+  const numbered = texts.map((t, i) => `[${i + 1}] ${t}`).join('\n\n');
+
+  const prompt = [
+    `把下面的 ${texts.length} 个英语段落逐段翻译成自然、地道的简体中文。`,
+    '',
+    '要求：',
+    '1. 意译为主，读起来像中文原本就这么写，不要逐词直译。',
+    '2. 人名、地名等专有名词保留英文。',
+    `3. 输出的 t 数组长度必须正好是 ${texts.length}，顺序与输入段落一一对应。`,
+    '',
+    '只输出 JSON：{"t":["第1段译文","第2段译文"]}',
+    '',
+    numbered,
+  ].join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 0.3,
+      max_tokens: 3000,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    signal
+  );
+
+  const o = extractJson(content) as { t?: unknown };
+  const arr = Array.isArray(o.t) ? o.t : [];
+  const out = arr.map((x) => str(x, 1500));
+  if (out.length < texts.length || out.slice(0, texts.length).some((t) => !t)) {
+    throw new AiError('模型没有译全所有段落，请再试一次');
+  }
+  return out.slice(0, texts.length);
+}
+
+/* ---------------------------------------------------------------- 阅读理解 */
+
+export interface QuizQuestion {
+  q: string;
+  options: string[];
+  /** 正确选项下标 0~3 */
+  answer: number;
+  explain: string;
+}
+
+/** 按一篇文章出 5 道阅读理解选择题，判分在本地做，不额外花 token */
+export async function generateQuiz(
+  opts: { text: string; config: AiConfig; signal?: AbortSignal },
+  count = 5
+): Promise<QuizQuestion[]> {
+  const { text, config, signal } = opts;
+  const body = text.trim().slice(0, 4000);
+
+  const prompt = [
+    `根据下面这篇英语短文，出 ${count} 道英文阅读理解选择题，类似英语考试的阅读理解题。`,
+    '',
+    '要求：',
+    '1. 题干和选项全用英文，只考察原文里的细节、主旨、词义或推理，不要考文章之外的常识。',
+    '2. 每题正好 4 个选项，只有 1 个正确；干扰项要有迷惑性但明确错误。',
+    '3. answer 是正确选项的下标（0~3），几道题的正确答案不要都落在同一个位置。',
+    '4. explain 用中文，40 字以内，说明为什么选它、对应原文哪句。',
+    '5. 题干一行以内，每个选项不超过 15 个词。',
+    '',
+    '只输出 JSON：',
+    '{"qs":[{"q":"...","options":["A内容","B内容","C内容","D内容"],"answer":0,"explain":"..."}]}',
+    `qs 必须正好 ${count} 个。`,
+    '',
+    '原文：',
+    body,
+  ].join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 0.5,
+      max_tokens: 2200,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    signal
+  );
+
+  const o = extractJson(content) as { qs?: unknown };
+  const qs: QuizQuestion[] = (Array.isArray(o.qs) ? o.qs : [])
+    .map((it) => {
+      const x = (it || {}) as Record<string, unknown>;
+      const options = (Array.isArray(x.options) ? x.options : [])
+        .map((op) => str(op, 120))
+        .filter(Boolean)
+        .slice(0, 4);
+      const ans = Number(x.answer);
+      return {
+        q: str(x.q, 300),
+        options,
+        answer: Number.isInteger(ans) && ans >= 0 && ans < options.length ? ans : -1,
+        explain: str(x.explain, 200),
+      };
+    })
+    .filter((q) => q.q && q.options.length === 4 && q.answer >= 0)
+    .slice(0, count);
+
+  if (qs.length < Math.min(3, count)) {
+    throw new AiError('模型没有出够可用的题目，请再试一次');
+  }
+  return qs;
+}
+
 /* ---------------------------------------------------------------- 连接测试 */
 
 /** 测试配置是否可用：先查 /models（不消耗 token），不行再用一次极小的对话 */

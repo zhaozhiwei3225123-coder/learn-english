@@ -6,7 +6,20 @@ import {
   articleText,
   article,
   analyzed,
-  pieces,
+  paraGroups,
+  paraZh,
+  zhOpen,
+  zhLoading,
+  toggleParaZh,
+  translateAllPara,
+  quiz,
+  quizPicks,
+  quizLoading,
+  quizScore,
+  quizDone,
+  makeQuiz,
+  pickQuizOption,
+  resetQuiz,
   readingStats,
   studyWords,
   includeMastered,
@@ -230,6 +243,41 @@ function addNoteWords(): void {
   toast(
     `已加进词库：新增 ${res.added} 个${res.skipped ? `，跳过 ${res.skipped} 个已有` : ''}`
   );
+}
+
+/** 段落译文展开 / 收起；第一次点会一次请求翻好全篇 */
+async function onToggleZh(i: number): Promise<void> {
+  try {
+    await toggleParaZh(i);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '翻译失败，请重试');
+  }
+}
+
+async function onTranslateAll(): Promise<void> {
+  if (zhLoading.value) return;
+  if (!article.value.trim()) {
+    toast('先载入一篇文章');
+    return;
+  }
+  try {
+    await translateAllPara();
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '翻译失败，请重试');
+  }
+}
+
+async function onMakeQuiz(): Promise<void> {
+  if (quizLoading.value) return;
+  if (!article.value.trim()) {
+    toast('先载入一篇文章');
+    return;
+  }
+  try {
+    await makeQuiz();
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '出题失败，请重试');
+  }
 }
 
 async function onFetchWiki(): Promise<void> {
@@ -485,13 +533,13 @@ function formNote(): string {
         <button class="btn ghost" :disabled="noteLoading" @click="onAnnotate">
           {{ noteLoading ? 'AI 正在读…' : note ? '✨ 重新精读' : '✨ AI 精读' }}
         </button>
-        <span class="coach-tip">
-          {{
-            hasApiKey()
-              ? '生成中文标题、一句话导读、3~6 个生词和长难句解析'
-              : '需要在「设置」里填 DeepSeek API Key 才能用'
-          }}
-        </span>
+        <button class="btn ghost" :disabled="zhLoading" @click="onTranslateAll">
+          {{ zhLoading ? '翻译中…' : paraZh.length ? '🌐 全部译文' : '🌐 中文翻译' }}
+        </button>
+        <button class="btn ghost" :disabled="quizLoading" @click="onMakeQuiz">
+          {{ quizLoading ? '出题中…' : quiz ? '🔁 再出 5 题' : '📝 阅读理解' }}
+        </button>
+        <span v-if="!hasApiKey()" class="coach-tip">需要在「设置」里填 DeepSeek API Key 才能用这些功能</span>
       </div>
 
       <div v-if="note" class="note-card">
@@ -529,20 +577,35 @@ function formNote(): string {
         <span>不在词库 <b>{{ readingStats.notInDeck }}</b> 词</span>
       </div>
 
-      <div class="article">
-        <template v-for="(p, i) in pieces" :key="i">
-          <span v-if="!p.isWord" class="rd-sep">{{ p.text }}</span>
-          <button
-            v-else-if="p.word"
-            class="rd-w"
-            :class="p.word.group === 'mastered' ? 'know' : 'hit'"
-            :title="p.word.meaning"
-            @click="pickPiece(p)"
-          >
-            {{ p.text }}
-          </button>
-          <button v-else class="rd-w plain" @click="pickPiece(p)">{{ p.text }}</button>
-        </template>
+      <div class="article paras">
+        <div v-for="(g, gi) in paraGroups" :key="gi" class="para-card">
+          <div class="para-body">
+            <template v-for="(p, pi) in g.pieces" :key="pi">
+              <span v-if="!p.isWord" class="rd-sep">{{ p.text }}</span>
+              <button
+                v-else-if="p.word"
+                class="rd-w"
+                :class="p.word.group === 'mastered' ? 'know' : 'hit'"
+                :title="p.word.meaning"
+                @click="pickPiece(p)"
+              >
+                {{ p.text }}
+              </button>
+              <button v-else class="rd-w plain" @click="pickPiece(p)">{{ p.text }}</button>
+            </template>
+          </div>
+          <div class="para-foot">
+            <button
+              class="para-zh-btn"
+              :class="{ open: zhOpen[gi] }"
+              :disabled="zhLoading && !paraZh.length"
+              @click="onToggleZh(gi)"
+            >
+              {{ zhOpen[gi] ? '收起译文' : zhLoading && !paraZh.length ? '翻译中…' : '译' }}
+            </button>
+          </div>
+          <p v-if="zhOpen[gi] && paraZh[gi]" class="para-zh">{{ paraZh[gi] }}</p>
+        </div>
       </div>
 
       <!-- 点词详情 -->
@@ -568,6 +631,47 @@ function formNote(): string {
           {{ picked.word ? picked.word.meaning || '（没有释义）' : '文章里有，但词库中没有这个词。' }}
           <span v-if="formNote()" class="picked-form">{{ formNote() }}</span>
         </p>
+      </div>
+
+      <!-- 阅读理解 -->
+      <div v-if="quiz" class="quiz-card">
+        <div class="quiz-head">
+          <b>📝 阅读理解 · {{ quiz.length }} 题</b>
+          <span class="pager-info">
+            {{ quizDone ? `得分 ${quizScore} / ${quiz.length}` : '选出你认为对的选项，选完立刻判分' }}
+          </span>
+          <button class="btn ghost" @click="resetQuiz">重做</button>
+        </div>
+
+        <div v-for="(q, qi) in quiz" :key="qi" class="quiz-q">
+          <div class="qq-t">{{ qi + 1 }}. {{ q.q }}</div>
+          <div class="qq-ops">
+            <button
+              v-for="(op, oi) in q.options"
+              :key="oi"
+              class="quiz-op"
+              :class="{
+                right: quizPicks[qi] >= 0 && oi === q.answer,
+                wrong: quizPicks[qi] === oi && oi !== q.answer,
+              }"
+              :disabled="quizPicks[qi] >= 0"
+              @click="pickQuizOption(qi, oi)"
+            >
+              <span class="qq-letter">{{ String.fromCharCode(65 + oi) }}</span>
+              {{ op }}
+            </button>
+          </div>
+          <div v-if="quizPicks[qi] >= 0" class="qq-explain">
+            <span :class="quizPicks[qi] === q.answer ? 'ok' : 'no'">
+              {{
+                quizPicks[qi] === q.answer
+                  ? '✓ 答对了'
+                  : `✗ 正确答案 ${String.fromCharCode(65 + q.answer)}`
+              }}
+            </span>
+            {{ q.explain }}
+          </div>
+        </div>
       </div>
 
       <div class="read-actions">

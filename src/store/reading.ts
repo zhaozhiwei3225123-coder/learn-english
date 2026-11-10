@@ -1,9 +1,9 @@
 import { computed, ref } from 'vue';
 import type { Word } from '../types';
-import { deckWords } from './vocab';
+import { state, deckWords } from './vocab';
 import { baseForms, splitArticle } from '../lib/lemmatize';
 import { fetchNews, fetchWiki } from '../lib/articles';
-import type { ArticleNote } from '../lib/ai';
+import { resolveConfig, translateParas, generateQuiz, type ArticleNote, type QuizQuestion } from '../lib/ai';
 
 /**
  * 阅读：粘贴一段英文 → 标出词库里出现过的词 → 用这些词开一轮学习。
@@ -43,6 +43,10 @@ export function analyze(text = articleText.value): void {
   picked.value = null;
   saveText(t);
   note.value = notes.get(t) ?? null;
+  paraZh.value = [];
+  zhOpen.value = [];
+  quiz.value = null;
+  quizPicks.value = [];
 }
 
 export function clearArticle(): void {
@@ -50,6 +54,10 @@ export function clearArticle(): void {
   article.value = '';
   picked.value = null;
   note.value = null;
+  paraZh.value = [];
+  zhOpen.value = [];
+  quiz.value = null;
+  quizPicks.value = [];
   saveText('');
 }
 
@@ -94,6 +102,12 @@ export interface ArticlePiece {
   word: Word | null;
 }
 
+/** 一个自然段落：正文原文 + 这一段里的分词结果 */
+export interface ParaGroup {
+  para: string;
+  pieces: ArticlePiece[];
+}
+
 function lookup(token: string): Word | null {
   const idx = index.value;
   for (const form of baseForms(token)) {
@@ -103,12 +117,25 @@ function lookup(token: string): Word | null {
   return null;
 }
 
-export const pieces = computed<ArticlePiece[]>(() =>
-  splitArticle(article.value).map((s) => ({
+function buildPieces(text: string): ArticlePiece[] {
+  return splitArticle(text).map((s) => ({
     text: s.text,
     isWord: s.isWord,
     word: s.isWord ? lookup(s.text) : null,
-  }))
+  }));
+}
+
+/** 按换行切自然段，一段一张卡片 */
+export const paraGroups = computed<ParaGroup[]>(() =>
+  article.value
+    .split(/\n+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((para) => ({ para, pieces: buildPieces(para) }))
+);
+
+export const pieces = computed<ArticlePiece[]>(() =>
+  paraGroups.value.flatMap((g) => g.pieces)
 );
 
 export const readingStats = computed(() => {
@@ -249,4 +276,103 @@ export async function ensureDaily(force = false): Promise<DailyItem> {
   dailyList.value = [item, ...dailyList.value.filter((it) => it.key !== key)].slice(0, 40);
   saveDaily();
   return item;
+}
+
+/* ------------------------------------------------------- 段落翻译 */
+
+/** 与 paraGroups 对齐的段落译文；空数组 = 还没翻译 */
+export const paraZh = ref<string[]>([]);
+/** 每段译文是否展开 */
+export const zhOpen = ref<boolean[]>([]);
+export const zhLoading = ref(false);
+
+/** 译文按正文整篇缓存，同一篇不用再花 token */
+const zhCache = new Map<string, string[]>();
+
+function ensureConfig() {
+  const cfg = resolveConfig(state.settings);
+  if (!cfg) throw new Error('先到「设置 → AI 造句练习」填 DeepSeek API Key');
+  return cfg;
+}
+
+/** 确保全文译文已就位（有缓存直接用，没有就一次请求翻完全部段落） */
+async function ensureParaZh(): Promise<void> {
+  const paras = paraGroups.value.map((g) => g.para);
+  if (!paras.length) return;
+  if (paraZh.value.length === paras.length) return;
+
+  const cached = zhCache.get(article.value);
+  if (cached && cached.length === paras.length) {
+    paraZh.value = cached.slice();
+    return;
+  }
+
+  zhLoading.value = true;
+  try {
+    const out = await translateParas(paras, ensureConfig());
+    paraZh.value = out;
+    zhCache.set(article.value, out.slice());
+  } finally {
+    zhLoading.value = false;
+  }
+}
+
+/** 点某一段的「译」：第一次会顺带把整篇都翻了（一次请求），然后只展开这一段 */
+export async function toggleParaZh(i: number): Promise<void> {
+  if (zhOpen.value[i]) {
+    zhOpen.value[i] = false;
+    return;
+  }
+  try {
+    await ensureParaZh();
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('翻译失败，请重试');
+  }
+  while (zhOpen.value.length < paraZh.value.length) zhOpen.value.push(false);
+  zhOpen.value[i] = true;
+}
+
+/** 展开全部段落译文 */
+export async function translateAllPara(): Promise<void> {
+  await ensureParaZh();
+  while (zhOpen.value.length < paraZh.value.length) zhOpen.value.push(false);
+  zhOpen.value = paraZh.value.map(() => true);
+}
+
+/* ------------------------------------------------------- 阅读理解 */
+
+export const quiz = ref<QuizQuestion[] | null>(null);
+/** 每题已选的下标，-1 = 未作答 */
+export const quizPicks = ref<number[]>([]);
+export const quizLoading = ref(false);
+
+export const quizScore = computed(() => {
+  if (!quiz.value) return 0;
+  return quiz.value.reduce((n, q, i) => (quizPicks.value[i] === q.answer ? n + 1 : n), 0);
+});
+
+export const quizDone = computed(
+  () => !!quiz.value && quizPicks.value.length === quiz.value.length && quizPicks.value.every((p) => p >= 0)
+);
+
+export async function makeQuiz(): Promise<void> {
+  if (quizLoading.value || !article.value.trim()) return;
+  quizLoading.value = true;
+  try {
+    const qs = await generateQuiz({ text: article.value, config: ensureConfig() });
+    quiz.value = qs;
+    quizPicks.value = qs.map(() => -1);
+  } finally {
+    quizLoading.value = false;
+  }
+}
+
+export function pickQuizOption(qi: number, oi: number): void {
+  if (!quiz.value || quizPicks.value[qi] >= 0) return;
+  quizPicks.value[qi] = oi;
+}
+
+export function resetQuiz(): void {
+  if (!quiz.value) return;
+  quizPicks.value = quiz.value.map(() => -1);
 }
