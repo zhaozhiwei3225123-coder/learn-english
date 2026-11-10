@@ -161,7 +161,8 @@ export type ViewName =
   | 'decks'
   | 'words'
   | 'import'
+  | 'reading'
   | 'writing'
   | 'settings';
 export type WordFilter = 'all' | 'new' | 'review' | 'mastered' | 'wrong';
-export type StudyMode = 'full' | 'new-only' | 'review-only' | 'dictation';
+export type StudyMode = 'full' | 'new-only' | 'review-only' | 'dictation' | 'reading';

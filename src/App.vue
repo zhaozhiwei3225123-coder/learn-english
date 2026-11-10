@@ -20,12 +20,14 @@ import ReviewView from './components/ReviewView.vue';
 import DeckListView from './components/DeckListView.vue';
 import WordListView from './components/WordListView.vue';
 import ImportView from './components/ImportView.vue';
+import ReadingView from './components/ReadingView.vue';
 import WritingView from './components/WritingView.vue';
 import SettingsView from './components/SettingsView.vue';
 
 const tabs: { key: ViewName; label: string }[] = [
   { key: 'today', label: '今日' },
   { key: 'review', label: '复习' },
+  { key: 'reading', label: '阅读' },
   { key: 'decks', label: '词库' },
   { key: 'writing', label: '造句' },
   { key: 'import', label: '导入' },
@@ -52,7 +54,8 @@ function onNewDeck() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  const active = view.value === 'today' || view.value === 'review';
+  const active =
+    view.value === 'today' || view.value === 'review' || view.value === 'reading';
   if (!active || !session.current) return;
   // 听写模式用输入框作答，不响应翻面/评分快捷键
   if (session.current.mode === 'dictation') return;
@@ -129,6 +132,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       <DeckListView v-else-if="view === 'decks'" />
       <WordListView v-else-if="view === 'words'" />
       <ImportView v-else-if="view === 'import'" />
+      <ReadingView v-else-if="view === 'reading'" />
       <WritingView v-else-if="view === 'writing'" />
       <SettingsView v-else />
     </main>

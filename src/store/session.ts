@@ -1,5 +1,5 @@
 import { computed, reactive, ref } from 'vue';
-import type { StudyMode, StudySession, Word } from '../types';
+import type { StudyKind, StudyMode, StudySession, Word } from '../types';
 import { state, save, promoteMastered } from './vocab';
 import { addDays, todayKey } from '../lib/date';
 import { intervalDays, isDue, nextStage, shuffle, type Recall } from '../lib/srs';
@@ -90,6 +90,37 @@ export function startSession(mode: StudyMode = 'full'): boolean {
 
 export function reveal(): void {
   if (session.current) session.current.revealed = true;
+}
+
+/** 阅读学习集：按给定单词开一轮（不遵守每日配额，学完照常进入间隔复习） */
+export function startReadingSession(ids: string[]): boolean {
+  const set = new Set(ids);
+  const words = state.words.filter((w) => set.has(w.id));
+  undoStack.value = [];
+  if (!words.length) {
+    session.current = null;
+    return false;
+  }
+  const queue = shuffle(words).map((w) => ({
+    id: w.id,
+    kind: (w.group === 'new' ? 'new' : 'review') as StudyKind,
+    requeued: false,
+  }));
+  session.current = {
+    mode: 'reading',
+    queue,
+    idx: 0,
+    revealed: false,
+    requeued: [],
+    plannedNew: queue.filter((q) => q.kind === 'new').length,
+    plannedReview: queue.filter((q) => q.kind === 'review').length,
+    doneNew: 0,
+    doneReview: 0,
+    right: 0,
+    wrong: 0,
+    vague: 0,
+  };
+  return true;
 }
 
 /* ---------------------------------------------------------------- 撤销 */

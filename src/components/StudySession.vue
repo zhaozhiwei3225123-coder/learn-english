@@ -67,12 +67,19 @@ function onSpeak() {
 
 function nextRound() {
   const mode = session.current?.mode ?? 'full';
+  if (mode === 'reading') {
+    endSession();
+    setView('reading');
+    toast('这篇的学习集已完成');
+    return;
+  }
   if (!startSession(mode)) toast('没有可学的单词，先导入词库吧');
 }
 
 function back() {
+  const mode = session.current?.mode;
   endSession();
-  setView('today');
+  setView(mode === 'reading' ? 'reading' : 'today');
 }
 
 /** 听写结果：直接记账，不把错词再塞回本轮队列（它仍留在今日复习队列） */
@@ -128,8 +135,12 @@ function onDictationResult(known: boolean) {
       <b>{{ session.current.wrong }}</b>
     </p>
     <div class="btn-row" style="justify-content: center">
-      <button class="btn primary" @click="nextRound">再来一轮</button>
-      <button class="btn ghost" @click="back">回到今日</button>
+      <button class="btn primary" @click="nextRound">
+        {{ session.current.mode === 'reading' ? '完成 · 回到阅读' : '再来一轮' }}
+      </button>
+      <button class="btn ghost" @click="back">
+        {{ session.current.mode === 'reading' ? '回到阅读' : '回到今日' }}
+      </button>
     </div>
   </div>
 </template>
