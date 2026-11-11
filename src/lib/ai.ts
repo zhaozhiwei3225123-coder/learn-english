@@ -583,6 +583,7 @@ export async function translateWord(opts: {
   config: AiConfig;
   signal?: AbortSignal;
 }): Promise<WordGloss> {
+  const { config, signal } = opts;
   const word = opts.word.trim().slice(0, 60);
   const ctx = (opts.context || '').trim().slice(0, 400);
 
@@ -616,7 +617,7 @@ export async function translateWord(opts: {
         { role: 'user', content: prompt },
       ],
     },
-    opts.signal,
+    signal,
     30_000
   );
 

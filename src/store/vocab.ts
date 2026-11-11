@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue';
-import type { AppState, Deck, LogEntry, ParsedEntry, SentenceRecord, Word } from '../types';
+import type { AppState, Deck, LogEntry, ParsedEntry, Word } from '../types';
 import * as persist from '../lib/persist';
 import { todayKey } from '../lib/date';
 import { isDue, isMastered } from '../lib/srs';

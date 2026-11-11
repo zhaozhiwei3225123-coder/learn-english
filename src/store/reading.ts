@@ -247,7 +247,8 @@ export function retryGloss(): void {
 export function refreshPicked(): void {
   const p = picked.value;
   if (!p) return;
-  const w = lookup(p.surface);
+  // 选中的是短语时 surface 对不上词库，退而用 AI 给的词典形去找
+  const w = lookup(p.surface) ?? (gloss.value?.word ? lookup(gloss.value.word) : null);
   if (w) picked.value = { surface: p.surface, word: w };
 }
 
