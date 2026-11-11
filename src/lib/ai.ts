@@ -558,6 +558,80 @@ export async function generateQuiz(
   return qs;
 }
 
+/* ---------------------------------------------------------------- 文章取词 */
+
+export interface WordGloss {
+  /** 词典形（复数/过去式会还原；短语保持原样） */
+  word: string;
+  /** 美式音标，不带斜杠；短语可能为空 */
+  ipa: string;
+  /** 词性 + 中文释义 */
+  zh: string;
+  /** 这个词在本文句子里的用法提示，可空 */
+  note: string;
+}
+
+/**
+ * 查一个词（或短语）在文中的意思。
+ *
+ * 带上所在句子，模型才知道该给哪个义项——比如 article 在新闻里是「文章」，
+ * 在法律语境里是「条款」。结果由调用方缓存，同一个词不会重复花钱。
+ */
+export async function translateWord(opts: {
+  word: string;
+  context?: string;
+  config: AiConfig;
+  signal?: AbortSignal;
+}): Promise<WordGloss> {
+  const word = opts.word.trim().slice(0, 60);
+  const ctx = (opts.context || '').trim().slice(0, 400);
+
+  const prompt = [
+    '你在给中文母语的英语学习者查词。',
+    '',
+    `单词或短语：${word}`,
+    ctx ? `它所在的句子：${ctx}` : '',
+    '',
+    '要求：',
+    '1. zh：先给词性缩写（n. / v. / adj. / adv. / phr. 等），再给中文释义；多义用「；」分隔，总共不超过 40 字。',
+    '2. 如果给了句子，优先给**这个语境下**的意思，而不是词典里第一个义项。',
+    '3. ipa：美式音标，不带斜杠，例如 ˈkɒfi；短语可以留空。',
+    '4. word：词典形。复数还原成单数、动词变形还原原形；短语原样返回。',
+    '5. note：如果这个词在句中容易被误解（熟词僻义、固定搭配、俚语），用 30 字以内中文点一句；否则空字符串。',
+    '',
+    '输出 JSON：',
+    '{"word":"...","ipa":"...","zh":"...","note":"..."}',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const content = await chat(
+    config,
+    {
+      temperature: 0.2,
+      max_tokens: 300,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    opts.signal,
+    30_000
+  );
+
+  const o = extractJson(content) as Record<string, unknown>;
+  const zh = str(o.zh, 120);
+  if (!zh) throw new AiError('没查到释义，换一个词试试');
+
+  return {
+    word: str(o.word, 60) || word,
+    ipa: str(o.ipa, 60).replace(/^\/+|\/+$/g, ''),
+    zh,
+    note: str(o.note, 120),
+  };
+}
+
 /* ---------------------------------------------------------------- 四六级仿真阅读 */
 
 export type CetLevel = 'cet4' | 'cet6';

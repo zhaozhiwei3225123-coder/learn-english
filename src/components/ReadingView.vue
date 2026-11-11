@@ -23,8 +23,14 @@ import {
   studyWords,
   includeMastered,
   picked,
+  gloss,
+  glossLoading,
+  glossError,
+  retryGloss,
+  refreshPicked,
   analyze,
   pickPiece,
+  pickSelection,
   closePick,
   dailyList,
   cetLevel,
@@ -35,6 +41,7 @@ import {
   noteLoading,
   setNote,
   type DailyItem,
+  type ArticlePiece,
 } from '../store/reading';
 import { speak } from '../lib/speech';
 import {
@@ -305,6 +312,60 @@ function onSpeak(w: { word: string }): void {
   });
 }
 
+/* ------------------------------------------------------- 取词与收录 */
+
+/** 刚刚是因为选中文字而取词，紧接着的 click 不要重复处理 */
+let selectedAt = 0;
+
+const ipaOf = computed(() => picked.value?.word?.ipa || gloss.value?.ipa || '');
+
+/** 点词：如果刚选中过文字，这次点击跳过，避免把选区又拆成单词 */
+function onWordClick(p: ArticlePiece): void {
+  if (Date.now() - selectedAt < 300) return;
+  pickPiece(p);
+}
+
+function onSelectionEnd(ev: MouseEvent | TouchEvent): void {
+  const host = ev.currentTarget as HTMLElement | null;
+  if (!host) return;
+  // 手机上 touchend 早于选区更新，等一拍再读
+  if (ev.type === 'touchend') setTimeout(() => readSelection(host), 40);
+  else readSelection(host);
+}
+
+/** 读一次选区：去掉首尾标点，最多 4 个词，太长或含中文就忽略 */
+function readSelection(host: HTMLElement): void {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.anchorNode) return;
+  if (!host.contains(sel.anchorNode)) return;
+  const raw = sel
+    .toString()
+    .replace(/\s+/g, ' ')
+    .replace(/^[^A-Za-z]+/, '')
+    .replace(/[^A-Za-z]+$/, '')
+    .trim();
+  if (!raw || raw.length > 40) return;
+  if (!/^[A-Za-z][A-Za-z'’-]*( [A-Za-z][A-Za-z'’-]*){0,3}$/.test(raw)) return;
+  selectedAt = Date.now();
+  pickSelection(raw);
+  sel.removeAllRanges();
+}
+
+/** 把当前词（或选中的短语）加进词库，用 AI 给的音标和释义 */
+function onAddPicked(): void {
+  const p = picked.value;
+  if (!p) return;
+  const word = (gloss.value?.word || p.surface).trim();
+  const meaning = gloss.value?.zh || '';
+  if (!word || !meaning) {
+    toast('还没查到释义，等一下再点');
+    return;
+  }
+  const res = addEntries([{ word, meaning, ipa: gloss.value?.ipa || '' }], '阅读取词');
+  refreshPicked();
+  toast(res.added ? `已加入词库：${word}` : `${word} 已在词库，跳过`);
+}
+
 /** 词形提示：文章里是 running，词库是 run */
 function formNote(): string {
   const p = picked.value;
@@ -459,7 +520,7 @@ function formNote(): string {
       </div>
 
       <p class="hint">
-        <b>琥珀色是还没掌握的词</b>，灰色是已掌握。点任意单词看释义、听发音；滑到底部是这篇文章的阅读理解题，选完立刻判分并给中文解析。
+        <b>琥珀色是还没掌握的词</b>，灰色是已掌握。<b>点任意单词，或者用鼠标/手指选中一段文字</b>，就能看释义、听发音——词库里没有的词会结合这句话翻译，看着有用就一键加进词库。滑到底是这篇文章的阅读理解题。
       </p>
 
       <p v-if="from" class="article-src">
@@ -521,7 +582,7 @@ function formNote(): string {
         <span>不在词库 <b>{{ readingStats.notInDeck }}</b> 词</span>
       </div>
 
-      <div class="article paras">
+      <div class="article paras" @mouseup="onSelectionEnd" @touchend="onSelectionEnd">
         <div v-for="(g, gi) in paraGroups" :key="gi" class="para-card">
           <div class="para-body">
             <template v-for="(p, pi) in g.pieces" :key="pi">
@@ -531,11 +592,11 @@ function formNote(): string {
                 class="rd-w"
                 :class="p.word.group === 'mastered' ? 'know' : 'hit'"
                 :title="p.word.meaning"
-                @click="pickPiece(p)"
+                @click="onWordClick(p)"
               >
                 {{ p.text }}
               </button>
-              <button v-else class="rd-w plain" @click="pickPiece(p)">{{ p.text }}</button>
+              <button v-else class="rd-w plain" @click="onWordClick(p)">{{ p.text }}</button>
             </template>
           </div>
           <div class="para-foot">
@@ -555,26 +616,41 @@ function formNote(): string {
       <!-- 点词详情 -->
       <div v-if="showPicked && picked" class="picked">
         <div class="picked-head">
-          <b>{{ picked.word?.word ?? picked.surface }}</b>
-          <span v-if="picked.word?.ipa" class="ipa">/ {{ picked.word.ipa }} /</span>
+          <b>{{ picked.word?.word ?? gloss?.word ?? picked.surface }}</b>
+          <span v-if="ipaOf" class="ipa">/ {{ ipaOf }} /</span>
           <span v-if="picked.word" class="pick-tag" :class="picked.word.group">
             {{ picked.word.group === 'mastered' ? '已掌握' : picked.word.group === 'new' ? '新词' : '复习中' }}
           </span>
-          <span v-if="!picked.word" class="pick-tag miss">不在词库</span>
-          <button
-            v-if="picked.word"
-            class="icon-btn mini"
-            title="朗读"
-            @click="onSpeak(picked.word)"
-          >
+          <span v-else class="pick-tag miss">词库外</span>
+          <button class="icon-btn mini" title="朗读" @click="onSpeak({ word: picked.word?.word || picked.surface })">
             🔊
           </button>
           <button class="icon-btn mini picked-close" title="关闭" @click="closePick">✕</button>
         </div>
-        <p class="picked-mean">
-          {{ picked.word ? picked.word.meaning || '（没有释义）' : '文章里有，但词库中没有这个词。' }}
+
+        <!-- 词库里有释义就直接用，没有（或在词库外）就交给 AI -->
+        <p v-if="picked.word?.meaning" class="picked-mean">
+          {{ picked.word.meaning }}
           <span v-if="formNote()" class="picked-form">{{ formNote() }}</span>
         </p>
+
+        <p v-else-if="glossLoading" class="picked-mean dim">正在结合上下文查释义…</p>
+        <template v-else-if="gloss">
+          <p class="picked-mean">{{ gloss.zh }}</p>
+          <p v-if="gloss.note" class="picked-note">{{ gloss.note }}</p>
+        </template>
+        <p v-else-if="glossError" class="picked-mean dim">
+          {{ glossError }}
+          <button class="mini-link" @click="retryGloss">重试</button>
+        </p>
+
+        <div class="picked-act">
+          <button v-if="picked.word" class="btn ghost" disabled>已在词库</button>
+          <button v-else class="btn primary" :disabled="!gloss" @click="onAddPicked">
+            ＋ 加入词库
+          </button>
+          <span class="picked-tip">点单词或选中一段文字都能查，查到的词可直接入库</span>
+        </div>
       </div>
 
       <!-- 阅读理解 -->

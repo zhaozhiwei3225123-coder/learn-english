@@ -5,11 +5,13 @@ import { baseForms, splitArticle } from '../lib/lemmatize';
 import {
   resolveConfig,
   translateParas,
+  translateWord,
   generateQuiz,
   generatePassage,
   type ArticleNote,
   type CetLevel,
   type QuizQuestion,
+  type WordGloss,
 } from '../lib/ai';
 
 /**
@@ -160,13 +162,99 @@ export const studyWords = computed<Word[]>(() => {
   });
 });
 
+/* ------------------------------------------------------- 点词 / 选中取词 */
+
+/** 查词结果按小写词形缓存在内存，同一个词不重复花钱 */
+const glossCache = new Map<string, WordGloss>();
+
+/** 当前词的 AI 释义（词库里的词直接用词库释义，这里多半为空） */
+export const gloss = ref<WordGloss | null>(null);
+export const glossLoading = ref(false);
+export const glossError = ref('');
+
 export function pickPiece(p: ArticlePiece): void {
   if (!p.isWord) return;
-  picked.value = { surface: p.text, word: p.word };
+  select(p.text, p.word);
+}
+
+/**
+ * 选中一段文字（可能不止一个词）时取词：能对上词库就直接用词库释义，
+ * 对不上就让 AI 结合这句话翻译。
+ */
+export function pickSelection(text: string): void {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (!t) return;
+  select(t, lookup(t));
+}
+
+function select(surface: string, word: Word | null): void {
+  picked.value = { surface, word };
+  glossError.value = '';
+  gloss.value = glossCache.get(keyOf(surface)) ?? null;
+  // 词库外、或词库里这个词没填释义，都去问 AI
+  if ((!word || !word.meaning) && !gloss.value) void loadGloss(surface);
+}
+
+function keyOf(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/** 取词在文中的上下文：找到这个词所在的段落，截词前后各 120 字 */
+function contextOf(surface: string): string {
+  const key = keyOf(surface);
+  for (const g of paraGroups.value) {
+    const i = g.para.toLowerCase().indexOf(key);
+    if (i < 0) continue;
+    const start = Math.max(0, i - 120);
+    const end = Math.min(g.para.length, i + surface.length + 120);
+    return g.para.slice(start, end).trim();
+  }
+  return '';
+}
+
+async function loadGloss(surface: string): Promise<void> {
+  const key = keyOf(surface);
+  glossLoading.value = true;
+  glossError.value = '';
+  try {
+    const g = await translateWord({
+      word: surface,
+      context: contextOf(surface),
+      config: ensureConfig(),
+    });
+    glossCache.set(key, g);
+    // 用户可能已经点了别的词，只有还停在这个词上才回填
+    if (picked.value && keyOf(picked.value.surface) === key) gloss.value = g;
+  } catch (err) {
+    if (picked.value && keyOf(picked.value.surface) === key) {
+      glossError.value = err instanceof Error ? err.message : '查词失败，再点一次';
+    }
+  } finally {
+    glossLoading.value = false;
+  }
+}
+
+/** 重新查一次当前词（上一次失败时用） */
+export function retryGloss(): void {
+  const p = picked.value;
+  if (!p) return;
+  glossCache.delete(keyOf(p.surface));
+  gloss.value = null;
+  void loadGloss(p.surface);
+}
+
+/** 词被加进词库后，把点词面板里的引用换成新词，标签会从「词库外」变成「新词」 */
+export function refreshPicked(): void {
+  const p = picked.value;
+  if (!p) return;
+  const w = lookup(p.surface);
+  if (w) picked.value = { surface: p.surface, word: w };
 }
 
 export function closePick(): void {
   picked.value = null;
+  gloss.value = null;
+  glossError.value = '';
 }
 
 /* ------------------------------------------------------- 今日一篇 */
