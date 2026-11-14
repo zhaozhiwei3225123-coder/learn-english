@@ -118,16 +118,28 @@ function httpError(status: number, detail: string): AiError {
   return new AiError(`请求失败（${status}）${tail}`, status);
 }
 
-async function chat(
+interface ChatResult {
+  /** 模型正文（content 为空时退回 reasoning_content，比如误用了 R1 类模型） */
+  text: string;
+  finish: string;
+}
+
+async function chatOnce(
   cfg: AiConfig,
   payload: Record<string, unknown>,
   signal?: AbortSignal,
   timeoutMs = TIMEOUT_MS
-): Promise<string> {
+): Promise<ChatResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const onAbort = () => ctrl.abort();
-  signal?.addEventListener('abort', onAbort);
+
+  // R1 / reasoner 类模型不支持 response_format 和 temperature，带上会被 400 拒掉
+  const body: Record<string, unknown> = { model: cfg.model, ...payload };
+  if (/reasoner|r1/i.test(cfg.model)) {
+    delete body.response_format;
+    delete body.temperature;
+  }
 
   try {
     const res = await fetch(endpoint(cfg.baseUrl, '/chat/completions'), {
@@ -136,7 +148,7 @@ async function chat(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.apiKey}`,
       },
-      body: JSON.stringify({ model: cfg.model, ...payload }),
+      body: JSON.stringify(body),
       signal: ctrl.signal,
     });
 
@@ -151,10 +163,24 @@ async function chat(
       throw httpError(res.status, detail);
     }
 
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) throw new AiError('模型没有返回内容，请重试');
-    return content;
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string; reasoning_content?: string }; finish_reason?: string }[];
+    };
+    const msg = data?.choices?.[0]?.message ?? {};
+    const finish = data?.choices?.[0]?.finish_reason || '';
+    const content = (msg.content || '').trim();
+    // 兼容 R1：正文为空但思考过程里有内容时，从思考文本里碰运气抠 JSON
+    const text = content || (msg.reasoning_content || '').trim();
+    if (!text) {
+      throw new AiError(
+        finish === 'length'
+          ? '模型没有返回内容（回答被长度截断），请重试'
+          : /reasoner|r1/i.test(cfg.model)
+            ? '这个模型把额度都花在「思考」上了，建议到设置里把模型改成 deepseek-chat'
+            : '模型没有返回内容，请重试'
+      );
+    }
+    return { text, finish };
   } catch (err) {
     if (err instanceof AiError) throw err;
     if ((err as Error)?.name === 'AbortError') {
@@ -165,6 +191,67 @@ async function chat(
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
   }
+}
+
+async function chat(
+  cfg: AiConfig,
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+  timeoutMs = TIMEOUT_MS
+): Promise<string> {
+  return (await chatOnce(cfg, payload, signal, timeoutMs)).text;
+}
+
+/** 值得自动重试的错误：网络抖动、超时、限流、服务端 5xx、模型空返回 / JSON 不完整 */
+function worthRetry(err: unknown): boolean {
+  if (!(err instanceof AiError)) return false;
+  if (err.message === '已取消') return false;
+  if ([400, 401, 402, 403, 404].includes(err.status)) return false;
+  return true;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 请求并解析 JSON，带自动重试。
+ * 模型偶发的空返回、JSON 不完整（多因 max_tokens 截断）、超时、429/5xx
+ * 都在这里消化掉：截断就把 max_tokens 翻倍再试，其它错误退避后重试，
+ * 重试仍失败才把最后的错误抛给界面——用户就不用自己一遍遍点「重试」了。
+ */
+async function chatJson(
+  cfg: AiConfig,
+  payload: Record<string, unknown>,
+  opts: { signal?: AbortSignal; timeoutMs?: number; attempts?: number } = {}
+): Promise<unknown> {
+  const attempts = opts.attempts ?? 3;
+  let body = payload;
+  let last: unknown = null;
+
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0 && !opts.signal?.aborted) await sleep(500 * i);
+    try {
+      const r = await chatOnce(cfg, body, opts.signal, opts.timeoutMs);
+      const parsed = extractJson(r.text);
+      // 长度截断但恰好解析成功：结果可能不完整，照样翻倍重试一次求稳
+      if (r.finish === 'length' && i < attempts - 1) {
+        body = { ...body, max_tokens: Math.min((Number(body.max_tokens) || 1024) * 2, 8192) };
+        continue;
+      }
+      return parsed;
+    } catch (err) {
+      last = err;
+      if (!opts.signal?.aborted && worthRetry(err) && i < attempts - 1) {
+        const msg = err instanceof Error ? err.message : '';
+        // 截断导致的空返回 / JSON 不完整：提高上限再战
+        if (/截断|JSON|没有返回内容/.test(msg)) {
+          body = { ...body, max_tokens: Math.min((Number(body.max_tokens) || 1024) * 2, 8192) };
+        }
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw last instanceof Error ? last : new AiError('模型没有返回内容，请重试');
 }
 
 /* ---------------------------------------------------------------- 出题 */
@@ -212,21 +299,19 @@ export async function generateSentence(opts: GenerateOptions): Promise<Generated
     .filter(Boolean)
     .join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 1.0,
-      max_tokens: 600,
+      max_tokens: 800,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal
-  );
-
-  const o = extractJson(content) as Record<string, unknown>;
+    { signal }
+  )) as Record<string, unknown>;
   const zh = str(o.zh, 200);
   const en = str(o.en, 300);
   if (!zh || !en) throw new AiError('模型没有返回可用的题目，请重试');
@@ -290,21 +375,19 @@ export async function gradeTranslation(opts: GradeOptions): Promise<GradeResult>
     'issues 最多 3 条；没有明显问题就给空数组，不要为了凑数编造问题。',
   ].join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 0.2,
-      max_tokens: 900,
+      max_tokens: 1200,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal
-  );
-
-  const o = extractJson(content) as Record<string, unknown>;
+    { signal }
+  )) as Record<string, unknown>;
   const corrected = str(o.corrected);
   if (!corrected) throw new AiError('模型没有返回批改结果，请重试');
 
@@ -387,21 +470,19 @@ export async function annotateArticle(opts: AnnotateOptions): Promise<ArticleNot
     body,
   ].join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 0.4,
-      max_tokens: 1200,
+      max_tokens: 1500,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal
-  );
-
-  const o = extractJson(content) as Record<string, unknown>;
+    { signal }
+  )) as Record<string, unknown>;
 
   const words: ArticleWord[] = Array.isArray(o.words)
     ? o.words
@@ -460,21 +541,19 @@ export async function translateParas(
     numbered,
   ].join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 0.3,
-      max_tokens: 3000,
+      max_tokens: 3500,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal
-  );
-
-  const o = extractJson(content) as { t?: unknown };
+    { signal }
+  )) as { t?: unknown };
   const arr = Array.isArray(o.t) ? o.t : [];
   const out = arr.map((x) => str(x, 1500));
   if (out.length < texts.length || out.slice(0, texts.length).some((t) => !t)) {
@@ -519,21 +598,19 @@ export async function generateQuiz(
     body,
   ].join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 0.5,
-      max_tokens: 2200,
+      max_tokens: 2500,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal
-  );
-
-  const o = extractJson(content) as { qs?: unknown };
+    { signal }
+  )) as { qs?: unknown };
   const qs: QuizQuestion[] = (Array.isArray(o.qs) ? o.qs : [])
     .map((it) => {
       const x = (it || {}) as Record<string, unknown>;
@@ -606,22 +683,19 @@ export async function translateWord(opts: {
     .filter(Boolean)
     .join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 0.2,
-      max_tokens: 300,
+      max_tokens: 500,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal,
-    30_000
-  );
-
-  const o = extractJson(content) as Record<string, unknown>;
+    { signal, timeoutMs: 30_000, attempts: 2 }
+  )) as Record<string, unknown>;
   const zh = str(o.zh, 120);
   if (!zh) throw new AiError('没查到释义，换一个词试试');
 
@@ -713,22 +787,19 @@ export async function generatePassage(opts: {
     `qs 必须正好 ${count} 个。`,
   ].join('\n');
 
-  const content = await chat(
+  const o = (await chatJson(
     config,
     {
       temperature: 0.9,
-      max_tokens: 3000,
+      max_tokens: 4000,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     },
-    signal,
-    120_000
-  );
-
-  const o = extractJson(content) as Record<string, unknown>;
+    { signal, timeoutMs: 120_000 }
+  )) as Record<string, unknown>;
 
   const paras = (Array.isArray(o.paras) ? o.paras : [])
     .map((p) => str(p, 2000))
