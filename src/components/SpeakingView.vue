@@ -33,14 +33,18 @@ import {
   startSession,
   sendMessage,
   finishSession,
-  dropSession,
+  abandonSession,
   removeSession,
   clearSessions,
   resumeLast,
+  resumeSession,
   initSpeaking,
   pickTargets,
-  history as talkHistory,
+  allSessions,
+  allScripts,
+  openScript,
   sceneLabel,
+  sceneGroupName,
 } from '../store/speaking';
 import type { TalkSession } from '../types';
 import TalkReviewCard from './TalkReviewCard.vue';
@@ -69,10 +73,6 @@ const scenes = computed(
 );
 
 const scene = computed(() => currentScene.value);
-
-const sceneScripts = computed(() =>
-  state.talkScripts.filter((s) => s.sceneId === sceneId.value)
-);
 
 const unfinished = computed(() => state.talkSessions.find((s) => !s.endedAt) ?? null);
 
@@ -161,11 +161,6 @@ async function onMakeScript(): Promise<void> {
   if (ok) toast('范本写好了，点句子听发音');
 }
 
-function onPickScript(id: string): void {
-  currentScriptId.value = id;
-  openedZh.value = new Set();
-}
-
 /** 看完范本直接上场：切到实战并开一轮，不用再点一次 */
 async function onScriptToTalk(): Promise<void> {
   talkMode.value = 'talk';
@@ -233,10 +228,10 @@ async function onFinish(): Promise<void> {
 }
 
 function onDrop(): void {
-  if (!confirm('放弃这轮对话？没聊完的内容不会保留。')) return;
-  dropSession();
+  if (!confirm('结束这轮对话？记录会留在「我的记录」里，只是不生成复盘。')) return;
+  abandonSession();
   draft.value = '';
-  toast('已放弃这轮对话');
+  toast('已结束，记录已保留');
 }
 
 function onMic(): void {
@@ -283,13 +278,38 @@ function onRemoveSession(id: string): void {
 }
 
 function onClearSessions(): void {
-  const n = talkHistory.value.length;
+  const n = allSessions.value.length;
   if (!n) return;
-  if (!confirm(`清空全部 ${n} 轮对话记录？`)) return;
+  if (!confirm(`清空全部 ${n} 轮对话记录？范本不受影响。`)) return;
   clearSessions();
   reviewId.value = null;
   toast('对话记录已清空');
 }
+
+/** 从记录页打开某篇范本 */
+async function onOpenScriptFromRecords(id: string): Promise<void> {
+  const s = state.talkScripts.find((x) => x.id === id);
+  if (!s) return;
+  talkMode.value = 'learn';
+  sceneId.value = s.sceneId;
+  showAllZh.value = false;
+  openedZh.value = new Set();
+  await nextTick();
+  openScript(id);
+}
+
+/** 接着聊记录页里某条没结束的对话 */
+function onResumeOne(id: string): void {
+  if (!resumeSession(id)) return;
+  talkMode.value = 'talk';
+  reviewId.value = null;
+  toast('接着这轮聊');
+  focusInput();
+  void scrollBottom();
+}
+
+/** 未结束的对话有几轮 */
+const runningCount = computed(() => allSessions.value.filter((s) => !s.endedAt).length);
 
 /* ---------------------------------------------------------------- 生命周期 */
 
@@ -378,45 +398,55 @@ onMounted(() => {
             <button :class="{ active: talkMode === 'talk' }" @click="talkMode = 'talk'">
               🎭 情景实战 · 说
             </button>
+            <button :class="{ active: talkMode === 'records' }" @click="talkMode = 'records'">
+              📚 我的记录
+              <span v-if="runningCount" class="rec-dot" :title="`${runningCount} 轮没聊完`" />
+            </button>
           </div>
         </div>
 
-        <p class="hint talk-intro">
-          <template v-if="talkMode === 'learn'">
-            一段完整的真人对话，逐句标好谁在说、念什么、什么意思。先听懂、跟着读，
-            再去实战。范本只是参考——实战每次都会换人物脾气和突发状况，不会让你背台词。
-          </template>
-          <template v-else>
-            你演自己，AI 演对方。它只给一句开场白，后面的走向由你们现场聊出来。
-            说错了不影响它接话，点评会悄悄记在旁边，聊完再一起复盘。
-          </template>
+        <p v-if="talkMode === 'learn'" class="hint talk-intro">
+          一段完整的真人对话，逐句标好谁在说、念什么、什么意思。先听懂、跟着读，
+          再去实战。范本只是参考——实战每次都会换人物脾气和突发状况，不会让你背台词。
+          每一篇生成后都会自动存进「我的记录」。
+        </p>
+        <p v-else-if="talkMode === 'talk'" class="hint talk-intro">
+          你演自己，AI 演对方。它只给一句开场白，后面的走向由你们现场聊出来。
+          说错了不影响它接话，点评会悄悄记在旁边，聊完再一起复盘。
+          每轮对话无论有没有复盘，都会留在「我的记录」里。
+        </p>
+        <p v-else class="hint talk-intro">
+          这里存着你说过的每一句话和生成的每一篇范本。对话可以翻回来看整轮回放、补看复盘；
+          范本可以随时重新打开逐句读。都在本机，清空需要你手动确认。
         </p>
 
-        <div class="chips talk-groups">
-          <button
-            v-for="g in TALK_GROUPS"
-            :key="g.key"
-            class="chip"
-            :class="{ active: groupKey === g.key }"
-            @click="groupKey = g.key"
-          >
-            {{ g.icon }} {{ g.name }}
-          </button>
-        </div>
+        <template v-if="talkMode !== 'records'">
+          <div class="chips talk-groups">
+            <button
+              v-for="g in TALK_GROUPS"
+              :key="g.key"
+              class="chip"
+              :class="{ active: groupKey === g.key }"
+              @click="groupKey = g.key"
+            >
+              {{ g.icon }} {{ g.name }}
+            </button>
+          </div>
 
-        <div class="scene-grid">
-          <button
-            v-for="s in scenes"
-            :key="s.id"
-            class="scene-card"
-            :class="{ active: sceneId === s.id }"
-            @click="sceneId = s.id"
-          >
-            <span class="scene-icon">{{ s.icon }}</span>
-            <span class="scene-name">{{ s.name }}</span>
-            <span class="scene-meta">{{ s.partner }} · {{ levelLabel(s.level) }}</span>
-          </button>
-        </div>
+          <div class="scene-grid">
+            <button
+              v-for="s in scenes"
+              :key="s.id"
+              class="scene-card"
+              :class="{ active: sceneId === s.id }"
+              @click="sceneId = s.id"
+            >
+              <span class="scene-icon">{{ s.icon }}</span>
+              <span class="scene-name">{{ s.name }}</span>
+              <span class="scene-meta">{{ s.partner }} · {{ levelLabel(s.level) }}</span>
+            </button>
+          </div>
+        </template>
       </div>
 
       <!-- ==================== 对话范本 ==================== -->
@@ -432,7 +462,7 @@ onMounted(() => {
               :disabled="scripting || !scene"
               @click="onMakeScript"
             >
-              {{ scripting ? '正在写…' : scripts.length ? '换一篇' : '写一篇范本' }}
+              {{ scripting ? '正在写…' : currentScript ? '换一篇' : '写一篇范本' }}
             </button>
           </div>
         </div>
@@ -525,22 +555,14 @@ onMounted(() => {
           </div>
         </div>
 
-        <details v-if="sceneScripts.length > 1" class="script-archive">
-          <summary>这个场景的其它 {{ sceneScripts.length - 1 }} 篇</summary>
-          <div class="history-list">
-            <div v-for="s in sceneScripts" :key="s.id" class="archive-row">
-              <button class="link-btn archive-open" @click="onPickScript(s.id)">
-                {{ s.titleZh || s.titleEn }}
-                <span class="archive-meta">{{ fmtDate(s.at) }} · {{ s.lines.length }} 句</span>
-              </button>
-              <button class="link-btn" @click="onRemoveScript(s.id)">删除</button>
-            </div>
-          </div>
-        </details>
+        <div v-if="allScripts.length > 1" class="script-more">
+          一共生成过 {{ allScripts.length }} 篇范本，
+          <button class="link-btn" @click="talkMode = 'records'">去「我的记录」翻看 →</button>
+        </div>
       </div>
 
       <!-- ==================== 情景实战 ==================== -->
-      <div v-else class="panel">
+      <div v-else-if="talkMode === 'talk'" class="panel">
         <!-- 没在对话：开始 -->
         <template v-if="!active">
           <div class="panel-head">
@@ -693,39 +715,124 @@ onMounted(() => {
         </template>
       </div>
 
-      <!-- 对话历史 -->
-      <div v-if="talkMode === 'talk'" class="panel">
+      <!-- ==================== 我的记录 ==================== -->
+      <div v-else class="panel">
         <div class="panel-head">
-          <h2>聊过的场景</h2>
-          <div class="btn-row">
-            <span class="pager-info">共 {{ talkHistory.length }} 轮</span>
-            <button class="btn ghost" :disabled="!talkHistory.length" @click="onClearSessions">
-              清空
-            </button>
+          <h2>📚 我的记录</h2>
+          <span class="pager-info">
+            {{ allSessions.length }} 轮对话 · {{ allScripts.length }} 篇范本
+          </span>
+        </div>
+
+        <!-- 对话记录 -->
+        <div class="rec-section">
+          <div class="rec-head">
+            <h3>🎭 和 AI 的对话</h3>
+            <div class="btn-row">
+              <span class="pager-info">{{ allSessions.length }} 轮</span>
+              <button
+                class="btn ghost"
+                :disabled="!allSessions.length"
+                @click="onClearSessions"
+              >
+                清空
+              </button>
+            </div>
+          </div>
+
+          <div v-if="!allSessions.length" class="empty">
+            还没有对话。去「情景实战」聊一轮，结束后就会出现在这里。
+          </div>
+
+          <div v-else class="history-list">
+            <details v-for="s in allSessions" :key="s.id" class="write-history">
+              <summary>
+                <span
+                  class="hi-score"
+                  :class="
+                    !s.review
+                      ? 'idle'
+                      : s.review.score >= 80
+                      ? 'good'
+                      : s.review.score >= 60
+                      ? 'mid'
+                      : 'bad'
+                  "
+                >
+                  {{ s.review?.score ?? '—' }}
+                </span>
+                <span class="hi-mode">{{ sceneLabel(s.sceneId) }}</span>
+                <span class="hi-state" :class="{ run: !s.endedAt }">
+                  {{ s.endedAt ? (s.review ? '已复盘' : '未复盘') : '没聊完' }}
+                </span>
+                <span class="wh-zh">{{ s.review?.comment || s.setup }}</span>
+                <span class="wh-meta">
+                  {{ s.turns.filter((t) => t.role === 'me').length }} 句 ·
+                  {{ fmtDate(s.startedAt) }}
+                </span>
+              </summary>
+              <div class="wh-body">
+                <div class="btn-row">
+                  <button
+                    v-if="!s.endedAt"
+                    class="btn primary"
+                    @click="onResumeOne(s.id)"
+                  >
+                    接着这轮聊
+                  </button>
+                  <button class="btn ghost" @click="reviewId = s.id">
+                    {{ s.review ? '看复盘 / 回放' : '看对话回放' }}
+                  </button>
+                  <button class="link-btn" @click="onRemoveSession(s.id)">删除这轮</button>
+                </div>
+                <div class="rec-preview">
+                  <div v-for="t in s.turns.slice(-4)" :key="t.id" class="rec-line" :class="t.role">
+                    <span class="rec-who">{{ t.role === 'them' ? s.partner : '我' }}</span>
+                    <span class="rec-text">{{ t.en }}</span>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
 
-        <div v-if="!talkHistory.length" class="empty">还没有记录，聊完一轮就会出现在这里</div>
+        <!-- 范本记录 -->
+        <div class="rec-section">
+          <div class="rec-head">
+            <h3>📖 生成的对话范本</h3>
+            <div class="btn-row">
+              <span class="pager-info">{{ allScripts.length }} 篇</span>
+              <button
+                class="btn ghost"
+                :disabled="!allScripts.length"
+                @click="onClearScripts"
+              >
+                清空
+              </button>
+            </div>
+          </div>
 
-        <div v-else class="history-list">
-          <details v-for="s in talkHistory" :key="s.id" class="write-history">
-            <summary>
-              <span class="hi-score" :class="(s.review?.score ?? 0) >= 80 ? 'good' : (s.review?.score ?? 0) >= 60 ? 'mid' : 'bad'">
-                {{ s.review?.score ?? '—' }}
-              </span>
-              <span class="hi-mode">{{ sceneLabel(s.sceneId) }}</span>
-              <span class="wh-zh">{{ s.review?.comment || s.setup }}</span>
-              <span class="wh-meta">
-                {{ s.turns.filter((t) => t.role === 'me').length }} 句 · {{ fmtDate(s.startedAt) }}
-              </span>
-            </summary>
-            <div class="wh-body">
+          <div v-if="!allScripts.length" class="empty">
+            还没有范本。去「对话范本」点「写一篇范本」，生成后会自动存到这里。
+          </div>
+
+          <div v-else class="rec-scripts">
+            <div v-for="s in allScripts" :key="s.id" class="rec-script">
+              <div class="rec-script-main">
+                <b class="rec-script-title">{{ s.titleZh || s.titleEn }}</b>
+                <span class="rec-script-en">{{ s.titleEn }}</span>
+                <p class="rec-script-meta">
+                  {{ sceneLabel(s.sceneId) }}
+                  <span v-if="sceneGroupName(s.sceneId)">· {{ sceneGroupName(s.sceneId) }}</span>
+                  · {{ s.lines.length }} 句 · {{ s.cast.length }} 人 · {{ fmtDate(s.at) }}
+                </p>
+              </div>
               <div class="btn-row">
-                <button class="btn ghost" @click="reviewId = s.id">看复盘</button>
-                <button class="link-btn" @click="onRemoveSession(s.id)">删除这轮</button>
+                <button class="btn ghost" @click="onOpenScriptFromRecords(s.id)">打开</button>
+                <button class="link-btn" @click="onRemoveScript(s.id)">删除</button>
               </div>
             </div>
-          </details>
+          </div>
         </div>
       </div>
     </template>

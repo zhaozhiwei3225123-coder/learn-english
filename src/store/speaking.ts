@@ -30,8 +30,8 @@ import { todayKey } from '../lib/date';
  * （对方性格 + 情境意外），所以同一场景也不会聊出同一段对话。
  */
 
-/** 当前模式：看范本 / 打实战 */
-export const talkMode = ref<'learn' | 'talk'>('learn');
+/** 当前模式：看范本 / 打实战 / 翻记录 */
+export const talkMode = ref<'learn' | 'talk' | 'records'>('learn');
 
 /** 当前选中的场景 */
 export const sceneId = ref('cafe');
@@ -57,6 +57,12 @@ export const active = computed<TalkSession | null>(
 
 /** 已结束的会话（最新在前） */
 export const history = computed(() => state.talkSessions.filter((s) => s.endedAt));
+
+/** 全部对话，含还没聊完的（记录页用） */
+export const allSessions = computed(() => state.talkSessions);
+
+/** 全部范本，跨场景（记录页用） */
+export const allScripts = computed(() => state.talkScripts);
 
 export const currentScene = computed<TalkScene | undefined>(() => findScene(sceneId.value));
 
@@ -354,14 +360,21 @@ export async function finishSession(config: AiConfig): Promise<string | null> {
   }
 }
 
-/** 不保存，直接退出这轮对话 */
-export function dropSession(): void {
-  const id = activeId.value;
+/**
+ * 结束这轮但不出复盘：记录照样留着，历史里标「未复盘」。
+ * 只有一句都没说的空会话才丢掉——那种连记录都算不上。
+ */
+export function abandonSession(): void {
+  const session = active.value;
   activeId.value = null;
   talkHint.value = '';
   lastReviewedId.value = null;
-  if (!id) return;
-  state.talkSessions = state.talkSessions.filter((s) => s.id !== id);
+  if (!session) return;
+  if (!session.turns.some((t) => t.role === 'me')) {
+    state.talkSessions = state.talkSessions.filter((s) => s.id !== session.id);
+  } else {
+    session.endedAt = Date.now();
+  }
   save();
 }
 
@@ -377,13 +390,20 @@ export function clearSessions(): void {
   save();
 }
 
-/** 继续上次没聊完的对话（页面加载时调用） */
+/** 接着聊某一条没结束的对话 */
+export function resumeSession(id: string): boolean {
+  const s = state.talkSessions.find((x) => x.id === id && !x.endedAt);
+  if (!s) return false;
+  activeId.value = s.id;
+  sceneId.value = s.sceneId;
+  lastReviewedId.value = null;
+  return true;
+}
+
+/** 继续最近一条没聊完的对话 */
 export function resumeLast(): boolean {
   const last = state.talkSessions.find((s) => !s.endedAt);
-  if (!last) return false;
-  activeId.value = last.id;
-  sceneId.value = last.sceneId;
-  return true;
+  return last ? resumeSession(last.id) : false;
 }
 
 /** 场景标签（历史记录里显示） */

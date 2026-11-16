@@ -38,7 +38,7 @@ function say(text: string): void {
 
 <template>
   <div class="talk-review">
-    <div class="res-top">
+    <div v-if="review" class="res-top">
       <span class="score" :class="scoreClass(review?.score ?? 0)">{{ review?.score ?? 0 }}</span>
       <div class="res-meta">
         <b>{{ verdict(review?.score ?? 0) }}</b>
@@ -47,6 +47,12 @@ function say(text: string): void {
           {{ session.partner }} · 你说 {{ myTurns.length }} 句 · {{ fmtDate(session.startedAt) }}
         </p>
       </div>
+    </div>
+    <div v-else class="res-meta talk-noreview">
+      <b>这轮没做复盘</b>
+      <p class="talk-review-meta">
+        {{ session.partner }} · 你说 {{ myTurns.length }} 句 · {{ fmtDate(session.startedAt) }}
+      </p>
     </div>
 
     <div v-if="session.targets.length" class="res-block">
