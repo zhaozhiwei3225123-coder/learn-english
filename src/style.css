@@ -2539,3 +2539,626 @@ textarea:focus {
     display: none;
   }
 }
+
+/* ================================================================
+   口语：情景范本 + 情景实战
+   ================================================================ */
+
+.talk-intro {
+  margin: 0 0 14px;
+  line-height: 1.7;
+}
+.talk-groups {
+  margin-bottom: 12px;
+}
+
+/* ---------- 场景网格 ---------- */
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+.scene-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  font: inherit;
+  color: inherit;
+}
+.scene-card:hover {
+  border-color: #c7cdf0;
+  transform: translateY(-1px);
+}
+.scene-card.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.08);
+}
+.scene-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.scene-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.scene-meta {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.talk-level-tag {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11.5px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.talk-goal {
+  margin: 0 0 12px;
+  padding: 9px 13px;
+  border-radius: 12px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 13px;
+}
+
+/* ---------- 对话范本 ---------- */
+.script-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: #fff;
+}
+.script-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.script-title {
+  margin: 0;
+  font-size: 16.5px;
+  line-height: 1.35;
+}
+.script-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  line-height: 1.6;
+}
+.script-cast {
+  margin-bottom: 16px;
+}
+.cast-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+  font-size: 12px;
+}
+.cast-chip b {
+  font-weight: 650;
+}
+.cast-you {
+  color: var(--brand);
+  font-weight: 600;
+}
+.cast-role {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.script-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.script-line {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border-left: 3px solid var(--line);
+  background: #fbfcff;
+  transition: background 0.15s;
+}
+.script-line.playing {
+  background: var(--brand-soft);
+}
+.script-line.me {
+  background: #f5f4ff;
+}
+.script-who {
+  font-size: 12.5px;
+  font-weight: 650;
+  padding-top: 1px;
+  word-break: break-word;
+}
+.script-body {
+  min-width: 0;
+}
+.script-en {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+.script-zh {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.script-note {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--amber);
+  line-height: 1.6;
+}
+.script-tools {
+  display: flex;
+  gap: 14px;
+  margin-top: 7px;
+}
+.script-tools .link-btn {
+  font-size: 12px;
+}
+
+/* 说话人配色：四个人物四种色，够用又不花 */
+.tone-1 {
+  border-left-color: #4f46e5;
+}
+.tone-1 .script-who,
+.cast-chip.tone-1 b {
+  color: #4f46e5;
+}
+.tone-2 {
+  border-left-color: #0f9d78;
+}
+.tone-2 .script-who,
+.cast-chip.tone-2 b {
+  color: #0f9d78;
+}
+.tone-3 {
+  border-left-color: #b7791f;
+}
+.tone-3 .script-who,
+.cast-chip.tone-3 b {
+  color: #b7791f;
+}
+.tone-4 {
+  border-left-color: #a855f7;
+}
+.tone-4 .script-who,
+.cast-chip.tone-4 b {
+  color: #a855f7;
+}
+
+.script-phrases {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+.script-archive {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+.script-archive summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.archive-row:last-child {
+  border-bottom: none;
+}
+.archive-open {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+}
+.archive-meta {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* ---------- 实战：对话舞台 ---------- */
+.talk-opts {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  margin: 14px 0 4px;
+}
+.switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.switch-row input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+
+.talk-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.talk-stage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+.talk-partner {
+  margin-left: 10px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.talk-twist {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #f3f1ff;
+  color: #6d28d9;
+  font-size: 11.5px;
+  cursor: help;
+}
+.talk-setup {
+  margin: 0;
+  padding: 10px 13px;
+  border-radius: 12px;
+  background: #f7f8fd;
+  color: var(--ink-2);
+  font-size: 12.8px;
+  line-height: 1.7;
+}
+.talk-targets {
+  align-items: center;
+  margin: 0;
+}
+.talk-targets-label {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-right: 2px;
+}
+.talk-word {
+  font-size: 12px;
+  cursor: default;
+}
+.talk-word.hit {
+  background: var(--green-soft);
+  border-color: #b7e6d8;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.talk-scroll {
+  max-height: 52vh;
+  min-height: 180px;
+  overflow-y: auto;
+  padding: 6px 4px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scroll-behavior: smooth;
+}
+.bubble-row {
+  display: flex;
+}
+.bubble-row.them {
+  justify-content: flex-start;
+}
+.bubble-row.me {
+  justify-content: flex-end;
+}
+.bubble-col {
+  max-width: 78%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.bubble-row.me .bubble-col {
+  align-items: flex-end;
+}
+.bubble {
+  position: relative;
+  padding: 10px 13px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+  max-width: 100%;
+}
+.bubble-row.them .bubble {
+  border-top-left-radius: 4px;
+}
+.bubble-row.me .bubble {
+  border-top-right-radius: 4px;
+  background: linear-gradient(135deg, #5b53ea, #4338ca);
+  border-color: transparent;
+  color: #fff;
+}
+.bubble-who {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  margin-bottom: 3px;
+}
+.bubble-en {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 喇叭放在气泡里右上角，别挂到外面被滚动容器裁掉 */
+.bubble-row.them .bubble {
+  padding-right: 34px;
+}
+.bubble-say {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(22, 32, 58, 0.045);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  padding: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.bubble-say:hover {
+  opacity: 1;
+  background: var(--brand-soft);
+}
+
+.talk-fix {
+  padding: 7px 11px;
+  border-radius: 10px;
+  background: var(--amber-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 100%;
+}
+.fix-better {
+  margin: 0;
+  color: var(--amber);
+}
+.fix-mark {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.fix-tip {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+}
+.talk-used {
+  font-size: 11.5px;
+  color: var(--green);
+}
+
+.typing {
+  display: inline-flex;
+  gap: 4px;
+  padding: 12px 14px;
+}
+.typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  animation: talk-blink 1.2s infinite;
+}
+.typing span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes talk-blink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.talk-start-hint {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #f3f1ff;
+  color: #6d28d9;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.talk-input {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px;
+  background: #fff;
+}
+.talk-input:focus-within {
+  border-color: #c7cdf0;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.07);
+}
+.talk-textarea {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.6;
+  background: transparent;
+  color: var(--ink);
+}
+.talk-input-btns {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.mic-btn {
+  min-width: 44px;
+  padding: 8px 10px;
+}
+.mic-btn.listening {
+  background: var(--red-soft);
+  border-color: #f5c2c3;
+  color: var(--red);
+  animation: talk-pulse 1.4s infinite;
+}
+@keyframes talk-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(229, 72, 77, 0);
+  }
+}
+
+/* ---------- 复盘 ---------- */
+.talk-review {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.talk-review-meta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.talk-missed {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+}
+.talk-upgrades {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.talk-up-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+}
+.talk-up-from {
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+.talk-up-to {
+  color: var(--green);
+  font-weight: 600;
+}
+.talk-say {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+.talk-say:hover {
+  opacity: 1;
+}
+.talk-replay {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fbfcff;
+  border: 1px solid var(--line);
+}
+.talk-replay-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.talk-replay-line.me {
+  color: var(--brand);
+}
+.talk-replay-who {
+  flex: 0 0 58px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.talk-replay-text {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .scene-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  }
+  .script-line {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .bubble-col {
+    max-width: 88%;
+  }
+  .talk-scroll {
+    max-height: 46vh;
+  }
+}

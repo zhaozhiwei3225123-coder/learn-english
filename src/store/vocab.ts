@@ -252,6 +252,8 @@ export function clearAll(settings: AppState['settings']): void {
   state.logs = [];
   state.imports = [];
   state.sentenceAttempts = [];
+  state.talkSessions = [];
+  state.talkScripts = [];
   state.decks = [persist.defaultDeck()];
   state.activeDeckId = persist.DEFAULT_DECK_ID;
   state.settings = { ...settings };
@@ -267,5 +269,7 @@ export async function replaceAll(raw: unknown): Promise<void> {
   state.logs = next.logs;
   state.imports = next.imports;
   state.sentenceAttempts = next.sentenceAttempts;
+  state.talkSessions = next.talkSessions;
+  state.talkScripts = next.talkScripts;
   state.createdAt = next.createdAt;
 }

@@ -7,6 +7,8 @@ import type {
   SentenceAttempt,
   Settings,
   StudyKind,
+  TalkScript,
+  TalkSession,
   Word,
 } from '../types';
 import { todayKey } from './date';
@@ -60,6 +62,8 @@ export function emptyState(): AppState {
     logs: [],
     imports: [],
     sentenceAttempts: [],
+    talkSessions: [],
+    talkScripts: [],
     createdAt: Date.now(),
   };
 }
@@ -124,6 +128,17 @@ export function normalizeState(raw: unknown): AppState {
     imports: Array.isArray(s.imports) ? (s.imports as ImportRecord[]) : [],
     sentenceAttempts: Array.isArray(s.sentenceAttempts)
       ? (s.sentenceAttempts as SentenceAttempt[]).filter((x) => x && x.zh && x.text).slice(0, 2000)
+      : [],
+    talkSessions: Array.isArray(s.talkSessions)
+      ? (s.talkSessions as TalkSession[])
+          .filter((x) => x && x.id && Array.isArray(x.turns))
+          .map((x) => ({ ...x, turns: x.turns.filter((t) => t && t.en) }))
+          .slice(0, 300)
+      : [],
+    talkScripts: Array.isArray(s.talkScripts)
+      ? (s.talkScripts as TalkScript[])
+          .filter((x) => x && x.id && Array.isArray(x.lines) && x.lines.length > 0)
+          .slice(0, 200)
       : [],
     createdAt: s.createdAt || Date.now(),
   };

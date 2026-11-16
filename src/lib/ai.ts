@@ -845,6 +845,445 @@ export async function generatePassage(opts: {
   };
 }
 
+/* ---------------------------------------------------------------- 口语情景对话 */
+
+export interface TalkTarget {
+  word: string;
+  meaning: string;
+}
+
+export interface TalkOpener {
+  /** 中文场景说明：我是谁、在哪、要干嘛 */
+  setup: string;
+  /** 对方说的第一句英文 */
+  opener: string;
+  /** 中文提示：可以从哪句话开始说 */
+  hint: string;
+}
+
+export interface TalkReply {
+  /** 对方的回应（英文，1~3 句口语） */
+  reply: string;
+  /** 我这句更地道的说法，空表示没什么可改 */
+  better: string;
+  /** 中文点评，空表示不说 */
+  tip: string;
+  /** 用上的目标生词 */
+  used: string[];
+  /** 这轮对话是否已经自然结束 */
+  done: boolean;
+}
+
+export interface TalkReviewResult {
+  score: number;
+  usedTargets: string[];
+  missedTargets: string[];
+  issues: SentenceIssue[];
+  upgrades: { from: string; to: string; why: string }[];
+  comment: string;
+}
+
+/** 对话双方的消息（喂给模型的多轮上下文） */
+export interface TalkMessage {
+  role: 'them' | 'me';
+  en: string;
+}
+
+const LEVEL_HINT: Record<string, string> = {
+  easy: '你说得慢一些，句子短，词汇基础，耐心等对方说完。',
+  medium: '正常语速和真实生活用语，偶尔追问细节。',
+  hard: '说话带省略和口语词（gonna / kinda / you know），有时会抢话、绕话题或反问，像真实场景里那样。',
+};
+
+/** 一局对话的随机设定：对方性格 + 情境变数，用来打破「教科书对话」的套路 */
+export interface TalkVariation {
+  persona: string;
+  twists: string[];
+}
+
+function talkSystem(
+  scene: { name: string; role: string; goal: string; level: string },
+  variation?: TalkVariation
+): string {
+  const lines = [
+    '你在一款英语口语练习 App 里扮演对话角色，对方是中文母语的英语学习者。',
+    '',
+    `你的角色：${scene.role}`,
+    `场景：${scene.name}。学习者想办成的事：${scene.goal}。`,
+    `说话风格：${LEVEL_HINT[scene.level] || LEVEL_HINT.medium}`,
+  ];
+
+  if (variation) {
+    lines.push(
+      '',
+      '这一局的额外设定（必须用上，它决定了这次对话和常见范本不一样）：',
+      `- 对方的性格：${variation.persona}`,
+      ...variation.twists.map((t) => `- 情境变数：${t}`),
+      '',
+      '这是一次全新的相遇。不要复述任何现成的对话范本、教科书例句或你之前写过的台词，',
+      '按上面的变数自己发挥，让对方的态度和遇到的麻烦都具体、有生活感。'
+    );
+  }
+
+  lines.push(
+    '',
+    '规则：',
+    '1. 始终待在角色里，reply 必须是英文口语，1~3 句，不要旁白、不要括号动作、不要中文。',
+    '2. reply 结尾要自然地把话递回去（提个问题、等对方做决定、或表示为难），让对方有话说。',
+    '3. 对方说的英文可能有语法错误，你按意思自然回应，不要在 reply 里纠正或点评。',
+    '4. 纠正放在 better / tip 里：better 是对方那句话的地道说法（改最小必要处，保留原意），',
+    '   差不多就不用给；tip 用中文一句话说清为什么，25 字以内。',
+    '5. used 从【目标生词】里挑出对方这句真的用上了的（只填原词，没有就空数组）。',
+    '6. done：场景目标已经达成（钱付完了、事情定了、对方给了明确答复）时为 true，否则 false。',
+    '7. 严格只输出一个 JSON 对象，不要 markdown 代码块，不要解释文字。'
+  );
+
+  return lines.join('\n');
+}
+
+/** 目标生词约束：给模型看，也用来校验 used 的合法性 */
+function targetsBlock(targets: TalkTarget[]): string {
+  if (!targets.length) return '【目标生词】本轮没有指定，忽略即可。';
+  return [
+    '【目标生词】下面这些词学习者最近在背，请设计对话时主动创造机会让他用上，但不要生硬点名：',
+    targets.map((t) => `- ${t.word}${t.meaning ? `（${t.meaning}）` : ''}`).join('\n'),
+  ].join('\n');
+}
+
+function talkMessages(
+  scene: { name: string; role: string; goal: string; level: string },
+  setup: string,
+  targets: TalkTarget[],
+  history: TalkMessage[],
+  tail: string,
+  variation?: TalkVariation
+): { role: string; content: string }[] {
+  const head = [
+    talkSystem(scene, variation),
+    '',
+    `场景背景（中文，仅你理解用，不要念出来）：${setup}`,
+    '',
+    targetsBlock(targets),
+  ].join('\n');
+
+  const msgs: { role: string; content: string }[] = [{ role: 'system', content: head }];
+  for (const m of history) {
+    msgs.push({ role: m.role === 'them' ? 'assistant' : 'user', content: m.en });
+  }
+  if (tail) {
+    // 最后一条 user 消息末尾挂上输出要求；若最后一条恰好是 assistant，就补一条 user
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'user') last.content = `${last.content}\n\n${tail}`;
+    else msgs.push({ role: 'user', content: tail });
+  }
+  return msgs;
+}
+
+export interface GeneratedScript {
+  titleEn: string;
+  titleZh: string;
+  setting: string;
+  cast: { name: string; role: string }[];
+  lines: { speaker: string; en: string; zh: string; note?: string }[];
+  phrases: { en: string; zh: string }[];
+}
+
+/**
+ * 生成一段可学习的对话范本（多人、逐句中英对照）。
+ *
+ * 和 startTalk 的区别：这里产出的是**完整范文**，给用户看、听、跟读用的，
+ * 一次写完 8~14 轮并带中文翻译；实战那边只给开场白，剧情现场长出来。
+ * 两边都不互相引用，避免用户照着范本「背答案」。
+ */
+export async function generateScript(opts: {
+  scene: { name: string; role: string; goal: string; level: string };
+  targets: TalkTarget[];
+  variation?: TalkVariation;
+  config: AiConfig;
+  signal?: AbortSignal;
+}): Promise<GeneratedScript> {
+  const { scene, targets, variation, config, signal } = opts;
+
+  const prompt = [
+    `写一段${scene.name}场景下的真实英文对话范本，给中文母语的英语学习者看。`,
+    '',
+    '内容要求：',
+    '1. 8~14 轮对话，2~3 个说话人。其中一个是学习者本人（给他一个常见英文名），另外 1~2 个是对方。',
+    '2. 剧情要有推进：开口 → 出现一个小麻烦或分歧 → 商量、澄清 → 事情办成或没办成，结尾自然收住。',
+    '3. 必须是真人会说出口的口语：有 yeah / well / I mean / just 这类词，有省略和半截话，',
+    '   不要用 How do you do、I would like to purchase 这种教科书腔。',
+    '4. 每句英文都给中文翻译，翻译要是自然的中文口语，不要逐字硬译。',
+    '5. 每人一次说 1~3 句，不要一个人连着说一大段。',
+    targets.length
+      ? `6. 把下面这些词自然地用掉 2~3 个（用得上才用，别硬塞）：${targets
+          .map((t) => t.word)
+          .join('、')}。`
+      : '',
+    variation
+      ? `7. 这一篇的设定：${variation.persona}${variation.twists
+          .map((t) => ` ${t}`)
+          .join('')} 让它和常见的同类范文不一样。`
+      : '',
+    '',
+    '输出 JSON：',
+    '{',
+    '  "titleEn": "英文小标题（3~6 词）",',
+    '  "titleZh": "中文标题",',
+    '  "setting": "中文，30~50 字，交代场景和当下的情况",',
+    '  "cast": [{"name":"Mike","role":"中文说明这个人的身份"}],',
+    '  "lines": [{"speaker":"Mike","en":"台词","zh":"中文翻译","note":"可选：这句里值得学的表达，中文 20 字内"}],',
+    '  "phrases": [{"en":"地道表达","zh":"中文意思"}]',
+    '}',
+    'lines 里 speaker 必须是 cast 里出现过的 name。',
+    'note 只给其中 2~3 句最值得讲的，其余留空字符串。',
+    'phrases 给 3~5 个，是对话里真实出现的词组、搭配或句型。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const o = (await chatJson(
+    config,
+    {
+      temperature: 0.95,
+      max_tokens: 4000,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    { signal, timeoutMs: 120_000 }
+  )) as Record<string, unknown>;
+
+  const cast = (Array.isArray(o.cast) ? o.cast : [])
+    .map((c) => {
+      const x = (c || {}) as Record<string, unknown>;
+      return { name: str(x.name, 30), role: str(x.role, 80) };
+    })
+    .filter((c) => c.name)
+    .slice(0, 4);
+
+  const lines = (Array.isArray(o.lines) ? o.lines : [])
+    .map((l) => {
+      const x = (l || {}) as Record<string, unknown>;
+      return {
+        speaker: str(x.speaker, 30),
+        en: str(x.en, 400),
+        zh: str(x.zh, 400),
+        note: str(x.note, 120),
+      };
+    })
+    .filter((l) => l.en && l.zh)
+    .slice(0, 20);
+
+  if (lines.length < 5) throw new AiError('模型这次没写出完整对话，再试一次');
+
+  // speaker 兜底：模型偶尔会写 cast 里没有的名字
+  const names = cast.map((c) => c.name);
+  for (const l of lines) {
+    if (!l.speaker || !names.includes(l.speaker)) l.speaker = names[0] || 'A';
+  }
+
+  const phrases = (Array.isArray(o.phrases) ? o.phrases : [])
+    .map((p) => {
+      const x = (p || {}) as Record<string, unknown>;
+      return { en: str(x.en, 80), zh: str(x.zh, 80) };
+    })
+    .filter((p) => p.en && p.zh)
+    .slice(0, 6);
+
+  return {
+    titleEn: str(o.titleEn, 120) || scene.name,
+    titleZh: str(o.titleZh, 60) || scene.name,
+    setting: str(o.setting, 300) || scene.goal,
+    cast,
+    lines,
+    phrases,
+  };
+}
+
+/** 开一个新场景：生成中文背景 + 对方的第一句话 */export async function startTalk(opts: {
+  scene: { name: string; role: string; goal: string; level: string };
+  targets: TalkTarget[];
+  variation?: TalkVariation;
+  config: AiConfig;
+  signal?: AbortSignal;
+}): Promise<TalkOpener> {
+  const { scene, targets, variation, config, signal } = opts;
+
+  const prompt = [
+    '现在请开始这个场景。',
+    '',
+    '输出 JSON：',
+    '{',
+    '  "setup": "中文，40~70 字。用第二人称交代我是谁、现在在哪、面对谁、想办成什么，让人一眼进入情境",',
+    '  "opener": "你作为角色说的第一句英文，1~2 句，口语，要能直接引出我的回应",',
+    '  "hint": "中文，30 字以内，提示我可以怎么开口（给个话头，不要替我写完整句子）"',
+    '}',
+  ].join('\n');
+
+  const o = (await chatJson(
+    config,
+    {
+      temperature: 0.95,
+      max_tokens: 900,
+      response_format: { type: 'json_object' },
+      messages: talkMessages(scene, '', targets, [], prompt, variation),
+    },
+    { signal, timeoutMs: 60_000 }
+  )) as Record<string, unknown>;
+
+  const opener = str(o.opener, 400);
+  if (!opener) throw new AiError('模型没有给出开场白，再试一次');
+
+  return {
+    setup: str(o.setup, 300) || scene.goal,
+    opener,
+    hint: str(o.hint, 120),
+  };
+}
+
+const REPLY_TAIL = [
+  '请回应我这句话，输出 JSON：',
+  '{"reply":"你的英文回应","better":"我更地道的说法（没得改就给空字符串）",',
+  ' "tip":"中文一句话点评（没有就给空字符串）","used":["用上的目标生词"],"done":false}',
+].join('\n');
+
+/** 我说一句，对方回应 + 顺手给一句点评 */
+export async function replyTalk(opts: {
+  scene: { name: string; role: string; goal: string; level: string };
+  setup: string;
+  targets: TalkTarget[];
+  history: TalkMessage[];
+  variation?: TalkVariation;
+  config: AiConfig;
+  signal?: AbortSignal;
+}): Promise<TalkReply> {
+  const { scene, setup, targets, history, variation, config, signal } = opts;
+
+  const o = (await chatJson(
+    config,
+    {
+      temperature: 0.9,
+      max_tokens: 700,
+      response_format: { type: 'json_object' },
+      messages: talkMessages(scene, setup, targets, history, REPLY_TAIL, variation),
+    },
+    { signal, timeoutMs: 60_000 }
+  )) as Record<string, unknown>;
+
+  const reply = str(o.reply, 500);
+  if (!reply) throw new AiError('模型没有接话，再试一次');
+
+  // used 只保留真的在目标词里的，防止模型自己编
+  const allowed = new Map(targets.map((t) => [t.word.toLowerCase(), t.word]));
+  const used = (Array.isArray(o.used) ? o.used : [])
+    .map((w) => allowed.get(str(w, 40).toLowerCase()))
+    .filter((w): w is string => !!w);
+
+  return {
+    reply,
+    better: str(o.better, 400),
+    tip: str(o.tip, 160),
+    used: [...new Set(used)],
+    done: o.done === true,
+  };
+}
+
+/** 结束对话，给出整轮复盘 */
+export async function reviewTalk(opts: {
+  scene: { name: string; role: string; goal: string; level: string };
+  setup: string;
+  targets: TalkTarget[];
+  history: TalkMessage[];
+  variation?: TalkVariation;
+  config: AiConfig;
+  signal?: AbortSignal;
+}): Promise<TalkReviewResult> {
+  const { scene, setup, targets, history, variation, config, signal } = opts;
+
+  const mine = history.filter((m) => m.role === 'me').map((m) => `- ${m.en}`).join('\n');
+
+  const prompt = [
+    '对话结束了，请给这位学习者做一次复盘。',
+    '',
+    mine ? `他说过的句子：\n${mine}` : '他一句都没说就结束了。',
+    '',
+    '评分标准（0~100，别虚高，70 分 = 能把事情说清楚但表达平淡）：',
+    '- 40 分：目标是否达成，事情办成了没有。',
+    '- 35 分：表达是否清楚、对方是否需要反复确认。',
+    '- 25 分：语法和用词的地道程度。',
+    '',
+    '输出 JSON：',
+    '{',
+    '  "score": 78,',
+    `  "usedTargets": ["真正用上的目标生词"],`,
+    `  "missedTargets": ["目标生词里没机会用的"],`,
+    '  "issues": [{"type":"语法|用词|搭配|发音要点","bad":"他说的原文片段","good":"应该怎么说","why":"中文一句话"}],',
+    '  "upgrades": [{"from":"他的原话","to":"母语者的说法","why":"中文说明差别"}],',
+    '  "comment": "60 字以内中文总评，点出最该改的一个地方"',
+    '}',
+    'issues 最多 5 条，upgrades 2~3 条，只挑最值得改的，不要为凑数编。',
+    'usedTargets / missedTargets 只从【目标生词】里选；没有目标词就都给空数组。',
+  ].join('\n');
+
+  const o = (await chatJson(
+    config,
+    {
+      temperature: 0.3,
+      max_tokens: 1800,
+      response_format: { type: 'json_object' },
+      messages: talkMessages(scene, setup, targets, history, prompt, variation),
+    },
+    { signal, timeoutMs: 90_000 }
+  )) as Record<string, unknown>;
+
+  const allowed = new Map(targets.map((t) => [t.word.toLowerCase(), t.word]));
+  const pick = (v: unknown) =>
+    (Array.isArray(v) ? v : [])
+      .map((w) => allowed.get(str(w, 40).toLowerCase()))
+      .filter((w): w is string => !!w);
+
+  const used = pick(o.usedTargets);
+  const missed = pick(o.missedTargets).filter((w) => !used.includes(w));
+  // 模型漏报的补上，保证两者加起来是所有目标词
+  for (const t of targets) {
+    if (!used.includes(t.word) && !missed.includes(t.word)) missed.push(t.word);
+  }
+
+  const issues: SentenceIssue[] = (Array.isArray(o.issues) ? o.issues : [])
+    .map((it) => {
+      const x = (it || {}) as Record<string, unknown>;
+      return {
+        type: str(x.type, 12) || '问题',
+        bad: str(x.bad, 200),
+        good: str(x.good, 200),
+        why: str(x.why, 200),
+      };
+    })
+    .filter((x) => x.bad || x.good)
+    .slice(0, 5);
+
+  const upgrades = (Array.isArray(o.upgrades) ? o.upgrades : [])
+    .map((it) => {
+      const x = (it || {}) as Record<string, unknown>;
+      return { from: str(x.from, 200), to: str(x.to, 200), why: str(x.why, 200) };
+    })
+    .filter((x) => x.from && x.to)
+    .slice(0, 3);
+
+  const score = Math.max(0, Math.min(100, Math.round(Number(o.score) || 0)));
+
+  return {
+    score,
+    usedTargets: used,
+    missedTargets: missed,
+    issues,
+    upgrades,
+    comment: str(o.comment, 200),
+  };
+}
+
 /* ---------------------------------------------------------------- 连接测试 */
 
 /** 测试配置是否可用：先查 /models（不消耗 token），不行再用一次极小的对话 */
