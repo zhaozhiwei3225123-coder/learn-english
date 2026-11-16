@@ -20,6 +20,11 @@ import {
   talkError,
   talkHint,
   lastReviewedId,
+  showZhAll,
+  zhOpen,
+  zhLoading,
+  toggleTalkZh,
+  toggleTalkZhAll,
   currentScene,
   talkStats,
   scripts,
@@ -232,6 +237,16 @@ function onDrop(): void {
   abandonSession();
   draft.value = '';
   toast('已结束，记录已保留');
+}
+
+/** 单句中文：有译文直接展开，旧存档没译文才补翻一次 */
+function onToggleZh(turnId: string): void {
+  void toggleTalkZh(turnId, cfg.value);
+}
+
+/** 整段中文一键开关（顺便补齐旧存档缺的译文） */
+function onToggleZhAll(): void {
+  void toggleTalkZhAll(cfg.value);
 }
 
 function onMic(): void {
@@ -598,6 +613,10 @@ onMounted(() => {
               <input v-model="autoSpeak" type="checkbox" />
               <span>自动朗读对方的话</span>
             </label>
+            <label class="switch-row">
+              <input type="checkbox" :checked="showZhAll" @change="onToggleZhAll" />
+              <span>开局后对方的话显示中文</span>
+            </label>
           </div>
 
           <p v-if="talkError" class="coach-error">{{ talkError }}</p>
@@ -615,6 +634,10 @@ onMounted(() => {
                 </span>
               </div>
               <div class="btn-row">
+                <label class="switch-row compact">
+                  <input type="checkbox" :checked="showZhAll" @change="onToggleZhAll" />
+                  <span>中文</span>
+                </label>
                 <button class="btn ghost" :disabled="reviewing" @click="onDrop">放弃</button>
                 <button
                   class="btn primary"
@@ -652,6 +675,7 @@ onMounted(() => {
                   <div class="bubble">
                     <span v-if="t.role === 'them'" class="bubble-who">{{ active.partner }}</span>
                     <p class="bubble-en">{{ t.en }}</p>
+                    <p v-if="t.zh && (showZhAll || zhOpen[t.id])" class="bubble-zh">{{ t.zh }}</p>
                     <button
                       v-if="t.role === 'them'"
                       class="bubble-say"
@@ -659,6 +683,21 @@ onMounted(() => {
                       @click="say(t.en)"
                     >
                       🔊
+                    </button>
+                  </div>
+                  <div v-if="t.role === 'them'" class="bubble-tools">
+                    <button
+                      class="link-btn"
+                      :disabled="!!zhLoading[t.id]"
+                      @click="onToggleZh(t.id)"
+                    >
+                      {{
+                        zhLoading[t.id]
+                          ? '翻译中…'
+                          : t.zh && (showZhAll || zhOpen[t.id])
+                            ? '收起中文'
+                            : '中文'
+                      }}
                     </button>
                   </div>
                   <div v-if="t.role === 'me' && (t.better || t.tip)" class="talk-fix">

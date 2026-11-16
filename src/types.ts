@@ -150,6 +150,8 @@ export interface TalkTurn {
   /** them = AI 扮演的角色；me = 我说的 */
   role: 'them' | 'me';
   en: string;
+  /** 对方这句的中文翻译（只对 role=them；模型随回复一起给，老数据可能为空） */
+  zh?: string;
   /** 这句更地道的说法（只对 role=me，可能为空） */
   better?: string;
   /** 中文点评：为什么这么改（只对 role=me，可能为空） */

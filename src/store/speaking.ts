@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import type { TalkScript, TalkSession, TalkTurn, Word } from '../types';
 import { state, save, deckWords } from './vocab';
 import {
@@ -6,6 +6,7 @@ import {
   startTalk,
   replyTalk,
   reviewTalk,
+  translateTalkLines,
   type AiConfig,
   type TalkTarget,
   type TalkVariation,
@@ -50,6 +51,27 @@ export const talkError = ref('');
 export const lastReviewedId = ref<string | null>(null);
 /** 开局给的中文提示：可以从哪句话开始说（只说一次，不进对话记录） */
 export const talkHint = ref('');
+
+/**
+ * 展开了中文的句子 id；换会话时清空。
+ * 用普通对象而不是 Set：Set 的增删在 Vue 里要额外依赖 `has()` 的追踪，
+ * 换会话时还得分清「同一引用」和「新引用」，一不小心就渲染不更新。
+ */
+export const zhOpen = reactive<Record<string, boolean>>({});
+/** 一键显示整段中文 */
+export const showZhAll = ref(false);
+/** 正在补翻译的句子（旧存档没有译文时才需要） */
+export const zhLoading = reactive<Record<string, boolean>>({});
+
+/**
+ * 这句现在要不要显示中文。
+ * 只在 store 内部做逻辑判断用；模板里请直接写
+ * `t.zh && (showZhAll || zhOpen[t.id])`——包成函数调用时
+ * Vue 收不到 zhOpen 新增 key 的依赖，展开后不会重渲染。
+ */
+function zhShown(turn: TalkTurn): boolean {
+  return turn.role === 'them' && !!turn.zh && (showZhAll.value || !!zhOpen[turn.id]);
+}
 
 export const active = computed<TalkSession | null>(
   () => state.talkSessions.find((s) => s.id === activeId.value) ?? null
@@ -231,6 +253,7 @@ export async function startSession(config: AiConfig): Promise<boolean> {
   starting.value = true;
   talkError.value = '';
   lastReviewedId.value = null;
+  resetZh(false);
 
   try {
     pruneEmpty();
@@ -248,7 +271,7 @@ export async function startSession(config: AiConfig): Promise<boolean> {
       targets,
       variation: { persona: variation.persona, twists: variation.twists },
       turns: [
-        { id: uid('t'), role: 'them', en: open.opener, at: Date.now() },
+        { id: uid('t'), role: 'them', en: open.opener, zh: open.zh || undefined, at: Date.now() },
       ],
       startedAt: Date.now(),
     };
@@ -308,6 +331,7 @@ export async function sendMessage(text: string, config: AiConfig): Promise<TalkT
       id: uid('t'),
       role: 'them',
       en: res.reply,
+      zh: res.zh || undefined,
       at: Date.now(),
     };
     session.turns.push(theirs);
@@ -350,6 +374,7 @@ export async function finishSession(config: AiConfig): Promise<string | null> {
     session.endedAt = Date.now();
     activeId.value = null;
     lastReviewedId.value = session.id;
+    resetZh(true);
     save();
     return session.id;
   } catch (err) {
@@ -369,6 +394,7 @@ export function abandonSession(): void {
   activeId.value = null;
   talkHint.value = '';
   lastReviewedId.value = null;
+  resetZh(false);
   if (!session) return;
   if (!session.turns.some((t) => t.role === 'me')) {
     state.talkSessions = state.talkSessions.filter((s) => s.id !== session.id);
@@ -397,7 +423,78 @@ export function resumeSession(id: string): boolean {
   activeId.value = s.id;
   sceneId.value = s.sceneId;
   lastReviewedId.value = null;
+  resetZh(!!s.review);
   return true;
+}
+
+/** 换一轮对话时清掉中文展开状态；复盘过的记录默认整段中文可见 */
+function resetZh(reviewed: boolean): void {
+  for (const k of Object.keys(zhOpen)) delete zhOpen[k];
+  for (const k of Object.keys(zhLoading)) delete zhLoading[k];
+  // 是否显示中文属于个人偏好：用户开着就一直开着，只有看复盘时强制打开
+  if (reviewed) showZhAll.value = true;
+}
+
+/**
+ * 点某句的「中文」：有译文就展开 / 收起；
+ * 只有早先存档的对话没有译文，这时候才补发一次翻译请求。
+ */
+export async function toggleTalkZh(turnId: string, config: AiConfig): Promise<void> {
+  const turn = active.value?.turns.find((t) => t.id === turnId);
+  if (!turn || turn.role !== 'them') return;
+
+  if (zhShown(turn)) {
+    // 从「整段全显」退回单句控制时，先把已经可见的收进来，只收起点的这一句
+    if (showZhAll.value) {
+      showZhAll.value = false;
+      for (const t of active.value?.turns ?? []) {
+        if (t.role === 'them' && t.zh) zhOpen[t.id] = true;
+      }
+    }
+    delete zhOpen[turnId];
+    return;
+  }
+  if (turn.zh) {
+    zhOpen[turnId] = true;
+    return;
+  }
+  if (zhLoading[turnId]) return;
+
+  zhLoading[turnId] = true;
+  try {
+    const [zh] = await translateTalkLines([turn.en], config);
+    turn.zh = zh;
+    zhOpen[turnId] = true;
+    save();
+  } catch (err) {
+    talkError.value = (err as Error).message || '这句没译出来，再点一次';
+  } finally {
+    delete zhLoading[turnId];
+  }
+}
+
+/** 一键显示 / 收起整段中文，顺手补齐缺译文的旧句子 */
+export async function toggleTalkZhAll(config: AiConfig): Promise<void> {
+  if (showZhAll.value) {
+    showZhAll.value = false;
+    return;
+  }
+  showZhAll.value = true;
+
+  const session = active.value;
+  if (!session) return;
+  const missing = session.turns.filter((t) => t.role === 'them' && !t.zh && t.en);
+  if (!missing.length) return;
+
+  try {
+    const zh = await translateTalkLines(missing.map((t) => t.en), config);
+    missing.forEach((t, i) => {
+      if (zh[i]) t.zh = zh[i];
+    });
+    save();
+  } catch (err) {
+    talkError.value = (err as Error).message || '整段翻译失败，可以单句点开';
+  }
 }
 
 /** 继续最近一条没聊完的对话 */

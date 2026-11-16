@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { TalkSession } from '../types';
 import { speak } from '../lib/speech';
 
@@ -9,6 +9,12 @@ defineEmits<{ (e: 'close'): void; (e: 'again'): void }>();
 const review = computed(() => props.session.review);
 
 const myTurns = computed(() => props.session.turns.filter((t) => t.role === 'me'));
+
+/** 回放里是否显示中文（默认开：复盘时看懂对方说了什么比省地方重要） */
+const showZh = ref(true);
+
+/** 老对话没有译文时干脆不显示开关，免得勾了没反应 */
+const hasZh = computed(() => props.session.turns.some((t) => t.role === 'them' && t.zh));
 
 function scoreClass(score: number): string {
   if (score >= 85) return 'good';
@@ -103,7 +109,13 @@ function say(text: string): void {
     </div>
 
     <div class="res-block">
-      <div class="res-label">这轮对话</div>
+      <div class="res-label">
+        这轮对话
+        <label v-if="hasZh" class="replay-zh-toggle">
+          <input v-model="showZh" type="checkbox" />
+          中文
+        </label>
+      </div>
       <div class="talk-replay">
         <div
           v-for="t in session.turns"
@@ -112,7 +124,10 @@ function say(text: string): void {
           :class="t.role"
         >
           <span class="talk-replay-who">{{ t.role === 'them' ? session.partner : '我' }}</span>
-          <span class="talk-replay-text">{{ t.en }}</span>
+          <span class="talk-replay-text">
+            {{ t.en }}
+            <span v-if="showZh && t.zh" class="talk-replay-zh">{{ t.zh }}</span>
+          </span>
           <button v-if="t.role === 'them'" class="talk-say" @click="say(t.en)">🔊</button>
         </div>
       </div>

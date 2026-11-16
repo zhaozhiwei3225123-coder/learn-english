@@ -3307,3 +3307,64 @@ textarea:focus {
 .link-btn[disabled]:hover {
   text-decoration: none;
 }
+
+/* 对话气泡里的中文译文 */
+.bubble-zh {
+  margin: 7px 0 0;
+  padding-top: 6px;
+  padding-right: 14px;
+  border-top: 1px dashed rgba(22, 32, 58, 0.11);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.bubble-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+  margin-top: 1px;
+}
+.bubble-tools .link-btn {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.bubble-tools .link-btn:hover:not([disabled]) {
+  color: var(--brand);
+}
+
+/* 复盘回放里的中文 */
+.replay-zh-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.replay-zh-toggle input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+.talk-replay-zh {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.switch-row.compact {
+  gap: 6px;
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.switch-row.compact input {
+  width: 14px;
+  height: 14px;
+}

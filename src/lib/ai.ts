@@ -562,6 +562,57 @@ export async function translateParas(
   return out.slice(0, texts.length);
 }
 
+/* ---------------------------------------------------------------- 对白翻译 */
+
+/**
+ * 补翻对白。新对话的翻译是随回复一起给的（不再多发请求），
+ * 这里只服务两种场景：旧存档没存译文、或者模型那次漏给了 zh。
+ * 一次翻多句比逐句请求省 token。
+ */
+export async function translateTalkLines(
+  lines: string[],
+  config: AiConfig,
+  signal?: AbortSignal
+): Promise<string[]> {
+  if (!lines.length) return [];
+  const numbered = lines.map((t, i) => `[${i + 1}] ${t}`).join('\n');
+
+  const prompt = [
+    `把下面 ${lines.length} 句英语日常对话翻成简体中文。`,
+    '',
+    '要求：',
+    '1. 口语化，像字幕，读起来就是中国人平时会说的话，不要书面腔。',
+    '2. 保留原句的语气（抱怨、客气、为难、催促），不要统一成四平八稳的陈述。',
+    '3. 人名保留英文，不加解释、不加引号。',
+    `4. 输出的 t 数组长度必须正好是 ${lines.length}，顺序与输入一一对应。`,
+    '',
+    '只输出 JSON：{"t":["第1句译文","第2句译文"]}',
+    '',
+    numbered,
+  ].join('\n');
+
+  const o = (await chatJson(
+    config,
+    {
+      temperature: 0.3,
+      max_tokens: 1200,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    },
+    { signal }
+  )) as { t?: unknown };
+
+  const arr = Array.isArray(o.t) ? o.t : [];
+  const out = arr.map((x) => str(x, 600));
+  if (out.length < lines.length || out.slice(0, lines.length).some((t) => !t)) {
+    throw new AiError('模型没有译全这几句，请再试一次');
+  }
+  return out.slice(0, lines.length);
+}
+
 /* ---------------------------------------------------------------- 阅读理解 */
 
 export interface QuizQuestion {
@@ -857,6 +908,8 @@ export interface TalkOpener {
   setup: string;
   /** 对方说的第一句英文 */
   opener: string;
+  /** opener 的中文翻译 */
+  zh: string;
   /** 中文提示：可以从哪句话开始说 */
   hint: string;
 }
@@ -864,6 +917,8 @@ export interface TalkOpener {
 export interface TalkReply {
   /** 对方的回应（英文，1~3 句口语） */
   reply: string;
+  /** reply 的中文翻译 */
+  zh: string;
   /** 我这句更地道的说法，空表示没什么可改 */
   better: string;
   /** 中文点评，空表示不说 */
@@ -1118,6 +1173,7 @@ export async function generateScript(opts: {
     '{',
     '  "setup": "中文，40~70 字。用第二人称交代我是谁、现在在哪、面对谁、想办成什么，让人一眼进入情境",',
     '  "opener": "你作为角色说的第一句英文，1~2 句，口语，要能直接引出我的回应",',
+    '  "openerZh": "opener 的简体中文翻译，口语化、像字幕，不要加解释",',
     '  "hint": "中文，30 字以内，提示我可以怎么开口（给个话头，不要替我写完整句子）"',
     '}',
   ].join('\n');
@@ -1139,13 +1195,15 @@ export async function generateScript(opts: {
   return {
     setup: str(o.setup, 300) || scene.goal,
     opener,
+    zh: str(o.openerZh, 500),
     hint: str(o.hint, 120),
   };
 }
 
 const REPLY_TAIL = [
   '请回应我这句话，输出 JSON：',
-  '{"reply":"你的英文回应","better":"我更地道的说法（没得改就给空字符串）",',
+  '{"reply":"你的英文回应","zh":"reply 的简体中文翻译（口语化、像字幕，不加解释）",',
+  ' "better":"我更地道的说法（没得改就给空字符串）",',
   ' "tip":"中文一句话点评（没有就给空字符串）","used":["用上的目标生词"],"done":false}',
 ].join('\n');
 
@@ -1183,6 +1241,7 @@ export async function replyTalk(opts: {
 
   return {
     reply,
+    zh: str(o.zh, 500),
     better: str(o.better, 400),
     tip: str(o.tip, 160),
     used: [...new Set(used)],
